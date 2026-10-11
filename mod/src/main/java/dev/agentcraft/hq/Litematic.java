@@ -33,6 +33,19 @@ import net.minecraft.world.level.block.state.BlockState;
  * than failing the whole import: schematics are usually made in a different version.
  */
 public final class Litematic {
+	/**
+	 * Blocks that do something to whoever touches them, and what they become instead.
+	 *
+	 * <p>Builders use end portals as a flat black surface, which is a lovely dark floor right up
+	 * until someone walks across it and is standing in the End. The same goes for a nether portal
+	 * as a purple feature wall. They are swapped for the nearest thing that just sits there: an
+	 * imported build should never move anyone to another dimension.
+	 */
+	private static final java.util.Map<String, String> SUBSTITUTES = java.util.Map.of(
+		"minecraft:end_portal", "minecraft:black_concrete",
+		"minecraft:end_gateway", "minecraft:black_concrete",
+		"minecraft:nether_portal", "minecraft:purple_stained_glass");
+
 	/** Refuse anything bigger than this; a schematic is a building, not a world download. */
 	private static final long MAX_CELLS = 8_000_000L;
 	private static final long MAX_NBT_BYTES = 256L * 1024 * 1024;
@@ -46,11 +59,13 @@ public final class Litematic {
 	private final BlockState[] cells;
 	/** Block names the game does not have, with how many cells wanted them. */
 	public final List<String> unknown;
+	/** Blocks swapped for something inert on the way in (see SUBSTITUTES). */
+	public final List<String> replaced;
 	public final int blockEntities;
 	public final int entities;
 
-	private Litematic(String name, String author, int sizeX, int sizeY, int sizeZ, BlockState[] cells, List<String> unknown, int blockEntities,
-		int entities) {
+	private Litematic(String name, String author, int sizeX, int sizeY, int sizeZ, BlockState[] cells, List<String> unknown, List<String> replaced,
+		int blockEntities, int entities) {
 		this.name = name;
 		this.author = author;
 		this.sizeX = sizeX;
@@ -58,6 +73,7 @@ public final class Litematic {
 		this.sizeZ = sizeZ;
 		this.cells = cells;
 		this.unknown = List.copyOf(unknown);
+		this.replaced = List.copyOf(replaced);
 		this.blockEntities = blockEntities;
 		this.entities = entities;
 	}
@@ -187,6 +203,7 @@ public final class Litematic {
 
 		BlockState[] grid = new BlockState[(int) cells];
 		List<String> unknown = new ArrayList<>();
+		List<String> replaced = new ArrayList<>();
 		int bes = 0;
 		int ents = 0;
 		for (String key : regions.keySet()) {
@@ -200,7 +217,7 @@ public final class Litematic {
 			int oy = Math.min(pos[1], pos[1] + size[1] + (size[1] < 0 ? 1 : -1)) - minY;
 			int oz = Math.min(pos[2], pos[2] + size[2] + (size[2] < 0 ? 1 : -1)) - minZ;
 
-			List<BlockState> palette = palette(r, unknown);
+			List<BlockState> palette = palette(r, unknown, replaced);
 			long[] packed = r.getLongArray("BlockStates").orElse(new long[0]);
 			int bits = Math.max(2, 32 - Integer.numberOfLeadingZeros(Math.max(1, palette.size() - 1)));
 			long mask = (1L << bits) - 1L;
@@ -233,7 +250,7 @@ public final class Litematic {
 			bes += list(r, "TileEntities").size();
 			ents += list(r, "Entities").size();
 		}
-		return new Litematic(name, author, sx, sy, sz, grid, unknown, bes, ents);
+		return new Litematic(name, author, sx, sy, sz, grid, unknown, replaced, bes, ents);
 	}
 
 	/**
@@ -246,7 +263,7 @@ public final class Litematic {
 	 * silently resolves every block to air, which is how this was found: a house of 57,000 blocks
 	 * arrived with 3,500 of them and "minecraft:dirt" reported as a block the game does not have.)
 	 */
-	private static List<BlockState> palette(CompoundTag region, List<String> unknown) {
+	private static List<BlockState> palette(CompoundTag region, List<String> unknown, List<String> replaced) {
 		List<BlockState> out = new ArrayList<>();
 		for (Tag t : list(region, "BlockStatePalette")) {
 			if (!(t instanceof CompoundTag c)) {
@@ -254,8 +271,17 @@ public final class Litematic {
 				continue;
 			}
 			String id = c.getStringOr("Name", "minecraft:air");
+			String safe = SUBSTITUTES.get(id);
 			CompoundTag vanilla = new CompoundTag();
-			vanilla.putString("id", id);
+			vanilla.putString("id", safe != null ? safe : id);
+			if (safe != null) {
+				// a substituted block keeps none of the original's properties
+				out.add(NbtUtils.readBlockState(BuiltInRegistries.BLOCK, vanilla));
+				if (!replaced.contains(id)) {
+					replaced.add(id);
+				}
+				continue;
+			}
 			CompoundTag props = c.getCompoundOrEmpty("Properties");
 			if (!props.isEmpty()) {
 				vanilla.put("properties", props);

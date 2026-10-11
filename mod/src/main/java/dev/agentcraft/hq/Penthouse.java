@@ -146,10 +146,22 @@ final class Penthouse {
 		for (int y = bottom - 1; y <= top; y++) {
 			p.set(cx, y, cz, TRIM);
 		}
-		// a way in at the bottom and out at the top
+		// A doorway onto every floor the tower passes, so the stair actually serves the building
+		// rather than just joining its two ends. A floor is a column beside the tower you could
+		// stand on: something solid underfoot and two clear above.
+		for (int y = bottom; y <= top; y++) {
+			int wx = cx - r - 1;
+			boolean landing = !p.get(wx, y - 1, cz).isAir() && p.get(wx, y, cz).isAir() && p.get(wx, y + 1, cz).isAir();
+			if (!landing && y != bottom && y != top) {
+				continue;
+			}
+			for (int h = 0; h <= 1; h++) {
+				p.set(cx - r, y + h, cz, Blocks.AIR.defaultBlockState());
+			}
+			// the tread beside the door, so you step out level instead of into the well
+			p.set(cx - r + 1, y - 1, cz, TRIM);
+		}
 		for (int h = 0; h <= 1; h++) {
-			p.set(cx - r, bottom + h, cz, Blocks.AIR.defaultBlockState());
-			p.set(cx - r, top + h, cz, Blocks.AIR.defaultBlockState());
 			p.set(cx - r, top + h, cz - 1, Blocks.AIR.defaultBlockState());
 		}
 	}

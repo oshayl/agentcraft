@@ -76,10 +76,10 @@ final class Amenities {
 	 *
 	 * @return true when a pool was found and fitted out
 	 */
-	static boolean poolside(Plan p, Anchors.Builder a, int minX, int minZ, int maxX, int maxZ, int below) {
+	static int poolside(Plan p, Anchors.Builder a, int minX, int minZ, int maxX, int maxZ, int below) {
 		// The level with the most water under the building, not the first water found: a modern
-		// house has a basin or a trough near the surface, and decking those leaves sea lanterns
-		// hanging over the lawn.
+		// house has a basin or a trough near the surface, and decking one of those leaves sea
+		// lanterns hanging over the lawn.
 		int bestY = -1;
 		int bestN = 0;
 		for (int y = below; y > below - 40; y--) {
@@ -87,9 +87,7 @@ final class Amenities {
 			for (int x = minX; x <= maxX; x++) {
 				for (int z = minZ; z <= maxZ; z++) {
 					// the surface of a body of water: water here, none directly above
-					boolean water = !p.get(x, y, z).getFluidState().isEmpty();
-					boolean deeper = !p.get(x, y + 1, z).getFluidState().isEmpty();
-					if (water && !deeper) {
+					if (!p.get(x, y, z).getFluidState().isEmpty() && p.get(x, y + 1, z).getFluidState().isEmpty()) {
 						n++;
 					}
 				}
@@ -100,7 +98,7 @@ final class Amenities {
 			}
 		}
 		if (bestN < 20 || bestY < 0) {
-			return false;
+			return -1;
 		}
 		int x0 = Integer.MAX_VALUE;
 		int z0 = Integer.MAX_VALUE;
@@ -116,46 +114,78 @@ final class Amenities {
 				}
 			}
 		}
-		int deck = bestY;
-		for (int x = x0 - 2; x <= x1 + 2; x++) {
-			for (int z = z0 - 2; z <= z1 + 2; z++) {
-				boolean water = x >= x0 && x <= x1 && z >= z0 && z <= z1 && !p.get(x, deck, z).getFluidState().isEmpty();
-				if (water || p.get(x, deck, z).isAir()) {
-					continue;
-				}
-				p.set(x, deck, z, St.slab(Blocks.SMOOTH_SANDSTONE_SLAB, true));
-				for (int h = 1; h <= 2; h++) {
-					if (!p.get(x, deck + h, z).isAir()) {
-						break;
-					}
-					p.set(x, deck + h, z, Blocks.AIR.defaultBlockState());
-				}
-			}
-		}
-		// loungers along one side, facing the water, a lantern between them
-		int lz = z0 - 2;
+		// The build already laid this deck. Earlier this rebuilt it at the water line and punched
+		// a hole under every lounger, because the deck sits a block above the water, not level
+		// with it. So nothing is rebuilt: the loungers go on the floor that is already there.
 		int n = 5;
+		int placed = 0;
+		int deck = -1;
 		for (int x = x0; x <= x1 && n <= 8; x += 3) {
-			if (p.get(x, deck - 1, z0 - 2).isAir()) {
+			int z = z0 - 2;
+			int y = standing(p, x, z, bestY);
+			if (y < 0) {
 				continue;
 			}
-			p.set(x, deck, lz, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
-			a.put(AnchorNames.slot(AnchorNames.LOUNGE, n++), x + 0.5, deck, lz + 0.5, 180, 0);
-			if (x + 1 <= x1) {
-				p.set(x + 1, deck, lz, St.lantern(Blocks.LANTERN, false));
+			deck = y;
+			// A stair seats you looking the way it is NOT facing, so a lounger north of the water
+			// faces north and the sitter looks south, over the pool. Both of these were the wrong
+			// way round and the team sat with their backs to it.
+			p.set(x, y, z, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
+			a.put(AnchorNames.slot(AnchorNames.LOUNGE, n++), x + 0.5, y, z + 0.5, 0, 0);
+			if (x + 1 <= x1 && standing(p, x + 1, z, bestY) == y) {
+				p.set(x + 1, y, z, St.lantern(Blocks.LANTERN, false));
 			}
+			placed++;
+		}
+		if (placed == 0) {
+			return -1;
 		}
 		// light in the ceiling, only where there is a ceiling to put it in
 		for (int x = x0; x <= x1; x += 2) {
 			for (int z : new int[] {z0 - 1, z1 + 1}) {
 				for (int h = 3; h <= 6; h++) {
-					if (!p.get(x, deck + h, z).isAir()) {
-						p.set(x, deck + h, z, Blocks.SEA_LANTERN.defaultBlockState());
+					if (!p.get(x, bestY + h, z).isAir()) {
+						p.set(x, bestY + h, z, Blocks.SEA_LANTERN.defaultBlockState());
 						break;
 					}
 				}
 			}
 		}
-		return true;
+		return deck;
 	}
+
+	/**
+	 * A corridor from the stair tower west into the building at this level, so the pool is on
+	 * the stair rather than behind twenty blocks of ground.
+	 */
+	static void passage(Plan p, int fromX, int z, int toX, int y) {
+		for (int x = Math.min(fromX, toX) - 1; x <= Math.max(fromX, toX); x++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				p.set(x, y - 1, z + dz, St.slab(Blocks.SMOOTH_SANDSTONE_SLAB, true));
+				for (int h = 0; h <= 2; h++) {
+					p.set(x, y + h, z + dz, Blocks.AIR.defaultBlockState());
+				}
+				boolean side = Math.abs(dz) == 1;
+				if (side) {
+					p.set(x, y + 3, z + dz, WHITE);
+					for (int h = 0; h <= 2; h++) {
+						p.set(x, y + h, z + dz * 2, WHITE);
+					}
+				}
+			}
+			p.set(x, y + 3, z, (x % 5 == 0) ? Blocks.SEA_LANTERN.defaultBlockState() : WHITE);
+		}
+	}
+
+	/** The y you would stand at on this column near the water, or -1 when there is nowhere. */
+	private static int standing(Plan p, int x, int z, int near) {
+		for (int y = near + 2; y >= near - 2; y--) {
+			if (!p.get(x, y - 1, z).isAir() && p.get(x, y, z).isAir() && p.get(x, y + 1, z).isAir()
+				&& p.get(x, y - 1, z).getFluidState().isEmpty()) {
+				return y;
+			}
+		}
+		return -1;
+	}
+
 }

@@ -112,9 +112,14 @@ public final class SchematicHqBuilder implements HqBuilder {
 			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()));
 			int tx = SITE_X + b[2] + 2;
 			int tz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
-			Penthouse.spiral(p, tx, tz, GROUND + 1, room.y());
+			// the pool first: the stair has to know how far down it is going
+			int poolDeck = Amenities.poolside(p, a, SITE_X, SITE_Z, SITE_X + lit.sizeX - 1, SITE_Z + lit.sizeZ - 1, GROUND - 1);
+			int bottom = poolDeck > 0 ? poolDeck : GROUND + 1;
+			Penthouse.spiral(p, tx, tz, bottom, room.y());
+			if (poolDeck > 0) {
+				Amenities.passage(p, tx - 2, tz, SITE_X + b[2], poolDeck);
+			}
 			Amenities.lobby(p, a, tx, tz, GROUND, 2);
-			Amenities.poolside(p, a, SITE_X, SITE_Z, SITE_X + lit.sizeX - 1, SITE_Z + lit.sizeZ - 1, GROUND - 1);
 			fitted.addAll(a.names());
 			floor = new Floor(room.y(), (room.x0() + room.x1()) / 2, (room.z0() + room.z1()) / 2, room.x0(), room.z0(), room.x1(), room.z1());
 		}
@@ -136,11 +141,13 @@ public final class SchematicHqBuilder implements HqBuilder {
 		anchors(a, floor, placed, fitted);
 		a.bounds(SITE_X, floor.y - 1, SITE_Z, SITE_X + lit.sizeX - 1, floor.y + 16, SITE_Z + lit.sizeZ - 1);
 
+		String swapped = lit.replaced.isEmpty() ? ""
+			: ", " + String.join(" and ", lit.replaced) + " replaced with something that does not move you to another dimension";
 		String unknown = lit.unknown.isEmpty() ? "" : ", " + lit.unknown.size() + " block(s) this version does not have were skipped ("
 			+ String.join(", ", lit.unknown.subList(0, Math.min(3, lit.unknown.size()))) + ")";
 		return "\"" + lit.name + "\" by " + lit.author + ": " + lit.sizeX + "x" + lit.sizeY + "x" + lit.sizeZ + ", " + st.changed()
 			+ " blocks placed. Main floor y=" + floor.y + ", " + placed.size() + " station(s) placed"
-			+ (placed.isEmpty() ? " - stand where you want one and run /agentcraft here <station>" : "") + unknown;
+			+ (placed.isEmpty() ? "" : ", " + placed.size() + " placed by hand") + swapped + unknown;
 	}
 
 	/** The station block a placement asks for (null: anchor only, nothing to place). */
