@@ -9,6 +9,8 @@ import dev.agentcraft.layout.AnchorNames;
 import dev.agentcraft.layout.Anchors;
 import dev.agentcraft.world.HqWorld;
 import java.util.Locale;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -35,6 +37,8 @@ public final class HqFeature {
 	public static void init() {
 		HqBuilders.register(new TestRoomBuilder());
 		HqBuilders.register(new StudioHqBuilder());
+		// one builder per .litematic in ~/.agentcraft/schematics: drop a build in, /agentcraft hq <name>
+		SchematicHqBuilder.registerAll();
 		HqBuilders.setDefault(StudioHqBuilder.ID);
 		// A fresh HQ world (no saved layout yet) gets the default HQ built before the player joins, so
 		// the first launch walks straight into it. AGENTCRAFT_HQ_AUTOBUILD=0 turns this off.
@@ -52,6 +56,7 @@ public final class HqFeature {
 				}
 			}
 		});
+		registerHere();
 		AgentCraftCommands.sub(root -> root.then(Commands.literal("hq")
 			.executes(ctx -> build(ctx, HqBuilders.defaultId(), false))
 			.then(Commands.literal("force").executes(ctx -> build(ctx, HqBuilders.defaultId(), true)))
@@ -62,6 +67,45 @@ public final class HqFeature {
 				})
 				.executes(ctx -> build(ctx, StringArgumentType.getString(ctx, "builder"), false))
 				.then(Commands.literal("force").executes(ctx -> build(ctx, StringArgumentType.getString(ctx, "builder"), true))))));
+	}
+
+	/**
+	 * {@code /agentcraft here <station> [binding]}: puts a station where the player stands, facing
+	 * the way they came from, and remembers it for this HQ ({@link StationPlacements}). This is how
+	 * a schematic HQ gets its terminal and shelves without anyone writing coordinates in code.
+	 */
+	private static void registerHere() {
+		AgentCraftCommands.sub(root -> root.then(Commands.literal("here")
+			.then(Commands.literal("clear").executes(ctx -> {
+				StationPlacements.remove(ctx.getSource().getServer(), HqBuilders.defaultId(), null);
+				ctx.getSource().sendSuccess(() -> Component.literal("Cleared every placed station; rebuild with /agentcraft hq"), true);
+				return 1;
+			}))
+			.then(Commands.argument("station", StringArgumentType.word())
+				.suggests((ctx, b) -> {
+					StationPlacements.names().forEach(b::suggest);
+					for (String a : dev.agentcraft.Cast.ids()) {
+						b.suggest(dev.agentcraft.layout.AnchorNames.DESK_PREFIX + a);
+						b.suggest(dev.agentcraft.layout.AnchorNames.MONITOR_PREFIX + a);
+					}
+					return b.buildFuture();
+				})
+				.executes(ctx -> here(ctx, ""))
+				.then(Commands.argument("binding", StringArgumentType.word()).executes(ctx -> here(ctx, StringArgumentType.getString(ctx, "binding")))))));
+	}
+
+	private static int here(CommandContext<CommandSourceStack> ctx, String binding) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		var player = ctx.getSource().getPlayerOrException();
+		String station = StringArgumentType.getString(ctx, "station");
+		String builderId = HqBuilders.defaultId();
+		// the block goes where the player stands, facing them: they are looking at it already
+		Direction facing = player.getDirection().getOpposite();
+		BlockPos pos = player.blockPosition();
+		StationPlacements.Placement p = new StationPlacements.Placement(station, pos.getX(), pos.getY(), pos.getZ(), facing, binding);
+		StationPlacements.put(ctx.getSource().getServer(), builderId, p);
+		ctx.getSource().sendSuccess(() -> Component.literal("Placed " + station + " at " + pos.getX() + " " + pos.getY() + " " + pos.getZ()
+			+ " facing " + facing.getSerializedName() + " for HQ '" + builderId + "'. Run /agentcraft hq " + builderId + " to build it."), true);
+		return 1;
 	}
 
 	private static boolean autoBuild() {
