@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Ctx } from './context.js';
 import { parseUnifiedDiff, type ParsedDiff } from './diff.js';
+import { MERGE_WITH_LAND_OPTION } from './protocol.js';
 import type { CiStatus, Decision, Repo, Worktree } from './protocol.js';
 import { withGitSafety } from './gitsafety.js';
 import { ensureDir, isInsideOrEqual } from './util/fsx.js';
@@ -136,6 +137,51 @@ async function userIdentity(repoPath: string): Promise<{ env: NodeJS.ProcessEnv;
   const email = await gitConfigGet(repoPath, 'user.email');
   if (name && email) return { env: identityEnv(name, email), who: `${name} <${email}>` };
   return { env: agentIdentity('user'), who: 'AgentCraft <user@agentcraft.local>' };
+}
+
+/** How much of an uncommitted diff is carried to the user or an agent before truncating. */
+const UNCOMMITTED_DIFF_LIMIT = 60_000;
+
+/** A look at the uncommitted work in a repo's base checkout (see RepoManager.uncommittedReview). */
+export interface UncommittedReview {
+  repoId: string;
+  branch: string;
+  checkout: string;
+  /** modified tracked files: the ones that actually block a merge */
+  files: Array<{ path: string; status: string; additions: number; deletions: number }>;
+  additions: number;
+  deletions: number;
+  /** listed so the review is complete; never committed by `land` */
+  untracked: string[];
+  diff: string;
+  truncated: boolean;
+  /** the branch waiting to merge, when the review was asked to consider one */
+  against?: string;
+  /** files that branch also changes: empty means committing cannot conflict with it */
+  overlapping?: string[];
+}
+
+/**
+ * A review rendered for the console and the feed: a summary, the per-file counts, and as much of
+ * the diff as fits. Used by `/fix review` and by the lead when it reviews before starting work.
+ */
+export function formatUncommittedReview(rev: UncommittedReview, diffLines = 40): string[] {
+  if (!rev.files.length) {
+    return [`${rev.branch}: nothing uncommitted that blocks a merge${rev.untracked.length ? ` (${rev.untracked.length} untracked file(s), which never block)` : ''}`];
+  }
+  const out = [`${rev.branch}: ${rev.files.length} modified file(s), +${rev.additions} -${rev.deletions} (these block merges)`];
+  for (const f of rev.files.slice(0, 20)) out.push(`  ${f.status || 'M'} ${f.path} +${f.additions} -${f.deletions}`);
+  if (rev.files.length > 20) out.push(`  ... and ${rev.files.length - 20} more`);
+  if (rev.untracked.length) out.push(`  (${rev.untracked.length} untracked file(s) are left alone: they never block a merge)`);
+  if (rev.overlapping?.length) out.push(`  careful: ${rev.against} changes the same file(s): ${rev.overlapping.join(', ')}`);
+  else if (rev.against) out.push(`  ${rev.against} changes none of these, so committing them cannot conflict with it`);
+  const body = rev.diff.split('\n').filter(Boolean);
+  if (body.length) {
+    out.push('  ---');
+    for (const l of body.slice(0, diffLines)) out.push(`  ${l}`);
+    if (body.length > diffLines || rev.truncated) out.push(`  ... diff truncated (${body.length} lines)`);
+  }
+  return out;
 }
 
 export class RepoManager {
@@ -317,6 +363,82 @@ export class RepoManager {
     const sha = (await git(checkout, ['rev-parse', '--short', 'HEAD'], { allowFail: true })).stdout.trim();
     await this.refresh(r.id);
     return `parked as ${sha}; merges can land now`;
+  }
+
+  /**
+   * Review the uncommitted work in a repo's base checkout, so it can be looked at instead of
+   * only blocking. `against` is a branch whose incoming changes matter (the one waiting to
+   * merge): files both sides touch are reported as `overlapping`, and when that list is empty
+   * committing this work cannot conflict with that merge, because git merges file by file.
+   *
+   * Untracked files are listed but never committed by `land`: `isDirty` ignores them, so they
+   * block nothing, and committing someone's unfinished new files unasked would be a surprise.
+   */
+  async uncommittedReview(repoId: string, against?: string): Promise<UncommittedReview> {
+    const r = this.require(repoId);
+    const checkout = await this.baseCheckout(r);
+    // Deliberately not trimmed as a whole: porcelain lines are `XY <path>`, and X is a space
+    // for an unstaged change, so trimming the output would eat the first line's status column.
+    const status = (await git(checkout, ['status', '--porcelain', '--untracked-files=no'], { allowFail: true })).stdout;
+    const files = status
+      .split('\n')
+      .map((line) => /^(..) (.+)$/.exec(line))
+      .filter((m): m is RegExpExecArray => !!m)
+      .map((m) => ({ status: m[1]!.trim() || 'M', path: m[2]! }));
+    const untracked = (await git(checkout, ['ls-files', '--others', '--exclude-standard'], { allowFail: true })).stdout.trim().split('\n').filter(Boolean);
+    const numstat = (await git(checkout, ['diff', 'HEAD', '--numstat'], { allowFail: true })).stdout.trim();
+    let additions = 0;
+    let deletions = 0;
+    const per = new Map<string, { additions: number; deletions: number }>();
+    for (const line of numstat.split('\n').filter(Boolean)) {
+      const [a, d, ...rest] = line.split('\t');
+      const add = Number(a) || 0;
+      const del = Number(d) || 0;
+      additions += add;
+      deletions += del;
+      per.set(rest.join('\t'), { additions: add, deletions: del });
+    }
+    const raw = (await git(checkout, ['diff', 'HEAD'], { allowFail: true })).stdout;
+    const diff = raw.length > UNCOMMITTED_DIFF_LIMIT ? raw.slice(0, UNCOMMITTED_DIFF_LIMIT) : raw;
+    let overlapping: string[] = [];
+    if (against) {
+      const incoming = (await git(r.path, ['diff', '--name-only', `${r.branch}...${against}`], { allowFail: true })).stdout.trim().split('\n').filter(Boolean);
+      const mine = new Set(files.map((f) => f.path));
+      overlapping = incoming.filter((f) => mine.has(f));
+    }
+    return {
+      repoId: r.id,
+      branch: r.branch,
+      checkout,
+      files: files.map((f) => ({ ...f, additions: per.get(f.path)?.additions ?? 0, deletions: per.get(f.path)?.deletions ?? 0 })),
+      additions,
+      deletions,
+      untracked,
+      diff,
+      truncated: raw.length > UNCOMMITTED_DIFF_LIMIT,
+      ...(against ? { against, overlapping } : {}),
+    };
+  }
+
+  /**
+   * Commit the base checkout's modified tracked files under the user's own message, so their
+   * work lands as a real commit rather than the anonymous checkpoint `park` makes. Untracked
+   * files are left alone for the same reason as in `park`.
+   */
+  async land(repoId: string, message: string): Promise<string> {
+    const r = this.require(repoId);
+    const subject = message.trim();
+    if (!subject) throw new RepoError('a commit for your own work needs a message', 'refused');
+    if (subject === RepoManager.PARK_SUBJECT) throw new RepoError('that is the checkpoint subject; use park instead', 'refused');
+    const checkout = await this.baseCheckout(r);
+    if (!(await this.isDirty(checkout))) return 'nothing to commit: no modified tracked files';
+    const staged = await git(checkout, ['add', '-u'], { allowFail: true });
+    if (staged.code !== 0) throw new RepoError(`could not stage: ${staged.stderr.trim()}`, 'failed');
+    const c = await git(checkout, ['commit', '-m', subject], { allowFail: true });
+    if (c.code !== 0) throw new RepoError(`could not commit: ${c.stderr.trim() || c.stdout.trim()}`, 'failed');
+    const sha = (await git(checkout, ['rev-parse', '--short', 'HEAD'], { allowFail: true })).stdout.trim();
+    await this.refresh(r.id);
+    return `committed as ${sha} on ${r.branch}; merges can land now`;
   }
 
   /** Undo a park, but only while it is still the tip: never rewrite a merge off the branch. */
@@ -673,7 +795,7 @@ export class RepoManager {
 
   private async doMerge(decision: Decision, commitMessage?: string): Promise<MergeResult> {
     if (decision.kind !== 'merge') throw new RepoError('merge requires a merge decision', 'refused');
-    if (decision.status !== 'answered' || decision.answer?.option !== 'Merge') {
+    if (decision.status !== 'answered' || !(decision.answer?.option === 'Merge' || decision.answer?.option === MERGE_WITH_LAND_OPTION)) {
       throw new RepoError(`decision ${decision.id} does not approve a merge`, 'refused');
     }
     if (!decision.repoId || !decision.worktree) throw new RepoError(`decision ${decision.id} names no repo/worktree`, 'refused');

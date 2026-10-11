@@ -211,6 +211,14 @@ public final class ConsoleActions {
 				// the Foreman also feeds each line; this is the inline acknowledgement
 				if (ack.result() != null && ack.result().has("lines")) {
 					com.google.gson.JsonArray ls = ack.result().getAsJsonArray("lines");
+					if (ls.size() == 0) {
+						return "nothing to fix " + UiBits.CHECK;
+					}
+					// a review is many lines (a diff): its body belongs in the feed, not on one
+					// console line, so acknowledge with the summary and say where the rest is
+					if (f.action().equals("review")) {
+						return ls.get(0).getAsString() + (ls.size() > 1 ? " \u00b7 " + (ls.size() - 1) + " more line(s) in the feed" : "");
+					}
 					StringBuilder b = new StringBuilder();
 					for (int i = 0; i < ls.size(); i++) {
 						if (i > 0) {
@@ -221,7 +229,7 @@ public final class ConsoleActions {
 					return b.length() > 0 ? b.toString() : "nothing to fix " + UiBits.CHECK;
 				}
 				return "done " + UiBits.CHECK;
-			}, f.action().equals("report") ? "checking\u2026" : f.action() + "\u2026");
+			}, f.action().equals("report") ? "checking\u2026" : f.action().equals("review") ? "reading your changes\u2026" : f.action() + "\u2026");
 			case AgentAction a -> {
 				List<CompletableFuture<Ack>> all = new ArrayList<>();
 				for (String id : a.agentIds()) {

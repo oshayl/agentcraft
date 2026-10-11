@@ -58,7 +58,7 @@ public final class ConsoleCommands {
 	public record RepoAdd(String path) implements Intent {
 	}
 
-	/** {@code action}: report | park | unpark | deps. {@code repoId} null = every registered repo. */
+	/** {@code action}: report | review | land | park | unpark | deps. {@code repoId} null = every registered repo. */
 	public record RepoFix(String action, @Nullable String repoId) implements Intent {
 	}
 
@@ -114,7 +114,7 @@ public final class ConsoleCommands {
 		new Command("task", "/task <id> cancel|retry|prioritize|reassign", "steer a task"),
 		new Command("repo", "/repo add <path>", "register a local git repo"),
 		new Command("repos", "/repos", "list repos"),
-		new Command("fix", "/fix [park|unpark|deps] [repo]", "clear what is blocking work"),
+		new Command("fix", "/fix [review|land|park|unpark|deps] [repo]", "review or clear what is blocking work"),
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("status", "/status", "goal, agents, tasks and decisions"),
 		new Command("sound", "/sound on|off", "decision bell and done chime"),
@@ -249,10 +249,12 @@ public final class ConsoleCommands {
 		return PERMISSION_MODES.contains(m) ? new Permissions(m) : new Invalid("usage: /permissions [ask|auto]");
 	}
 
-	private static final List<String> FIX_ACTIONS = List.of("report", "park", "unpark", "deps");
+	private static final List<String> FIX_ACTIONS = List.of("report", "review", "land", "park", "unpark", "deps");
 	private static final java.util.Map<String, String> FIX_HINTS = java.util.Map.of(
 		"report", "what is blocking work right now",
-		"park", "checkpoint your uncommitted changes so a merge can land",
+		"review", "read your own uncommitted changes (files, +/-, diff)",
+		"land", "commit your uncommitted changes so a merge can land",
+		"park", "the same, as an undoable checkpoint",
 		"unpark", "undo the last checkpoint",
 		"deps", "give worktrees the dependencies they are missing");
 
@@ -260,7 +262,7 @@ public final class ConsoleCommands {
 	private static Intent parseFix(List<String> args, ForemanState s) {
 		String action = args.isEmpty() ? "report" : args.get(0).toLowerCase(Locale.ROOT);
 		if (!FIX_ACTIONS.contains(action)) {
-			return new Invalid("usage: /fix [park|unpark|deps] [repo] (bare /fix reports what is blocking)");
+			return new Invalid("usage: /fix [review|land|park|unpark|deps] [repo] (bare /fix reports what is blocking)");
 		}
 		if (args.size() < 2) {
 			return new RepoFix(action, null);

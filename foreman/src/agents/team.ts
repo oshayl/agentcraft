@@ -31,7 +31,7 @@ import { describeCapabilities, resolveCapabilities, type AgentCapabilities, type
 import { agentGitIdentity } from '../util/git.js';
 import { classifyToolUse, describeRuleKey, describeToolCall } from '../policy.js';
 import type { BackendName, Decision, Goal, Task } from '../protocol.js';
-import { MERGE_OPTIONS, PERMISSION_OPTIONS } from '../protocol.js';
+import { MERGE_OPTIONS, MERGE_WITH_LAND_OPTION, PERMISSION_OPTIONS } from '../protocol.js';
 import type { TestResult } from '../repos.js';
 import { renderDiffText } from '../diff.js';
 import { formatInbox } from '../bus.js';
@@ -987,7 +987,7 @@ export class TeamBackend implements Backend {
         const hasDecision = this.fm.decisions.open().some((d) => d.kind === 'merge' && d.taskId === job.taskId);
         if (t && t.status === 'review' && !hasDecision) {
           // lead gave no verdict: still surface the merge to the user (never auto-merge)
-          this.openMergeDecision(t, `Marlow's review: ${truncate(stats?.resultText ?? '(no verdict)', 300)}`);
+          await this.openMergeDecision(t, `Marlow's review: ${truncate(stats?.resultText ?? '(no verdict)', 300)}`);
         }
       }
       return;
@@ -1070,18 +1070,36 @@ export class TeamBackend implements Backend {
       this.fm.setAgent(LEAD, { state: 'reading', station: 'mergestation', activity: `reviewing ${t.id}` });
       this.enqueue({ kind: 'review', agentId: LEAD, taskId: t.id, ...(t.goalId ? { goalId: t.goalId } : {}), sessionKey: `${LEAD}:${t.goalId ?? 'adhoc'}`, prompt: reviewPrompt(this.fm, this.fm.tasks.require(t.id), renderDiffText(diff.files), diff.stats, ci) });
     } else {
-      this.openMergeDecision(t, t.summary ?? 'Work complete.');
+      await this.openMergeDecision(t, t.summary ?? 'Work complete.');
     }
   }
 
-  private openMergeDecision(t: Task, summary: string): void {
+  private async openMergeDecision(t: Task, summary: string): Promise<void> {
     const wt = this.fm.repos.requireWorktree(t.repoId!, t.worktree!);
+    // A merge is refused while the checkout holding the base branch has modified tracked files.
+    // Rather than let the user discover that only when they click Merge, review their work here
+    // and offer to commit it as part of the same answer.
+    const mine = await this.fm.repos.uncommittedReview(t.repoId!, wt.branch).catch(() => undefined);
+    const blocked = !!mine?.files.length;
+    const clash = blocked && !!mine?.overlapping?.length;
+    const yours = blocked
+      ? `\n\nYour own uncommitted work on ${mine!.branch} (${mine!.files.length} file${mine!.files.length === 1 ? '' : 's'}, +${mine!.additions} -${mine!.deletions}) blocks this merge: ${mine!.files
+          .slice(0, 8)
+          .map((f) => f.path)
+          .join(', ')}${mine!.files.length > 8 ? ', ...' : ''}.${
+          clash
+            ? ` It touches the same file${mine!.overlapping!.length === 1 ? '' : 's'} as this branch (${mine!.overlapping!.join(', ')}), so committing it could conflict — look at it first with /fix review.`
+            : ' Nothing it touches is changed by this branch, so committing it cannot conflict with this merge.'
+        }`
+      : '';
     this.fm.createDecision({
       agentId: LEAD,
       kind: 'merge',
       question: `Merge ${t.id} "${t.title}" (${wt.branch}) into ${wt.base}?`,
-      options: [...MERGE_OPTIONS],
-      context: `${summary}\n${wt.files} files, +${wt.additions} -${wt.deletions} | tests: ${t.ci}`,
+      // the extra option only exists while the user's own work is in the way, and only when
+      // committing it cannot conflict with the branch being merged
+      options: blocked && !clash ? [MERGE_OPTIONS[0], MERGE_WITH_LAND_OPTION, ...MERGE_OPTIONS.slice(1)] : [...MERGE_OPTIONS],
+      context: `${summary}\n${wt.files} files, +${wt.additions} -${wt.deletions} | tests: ${t.ci}${yours}`,
       taskId: t.id,
       repoId: t.repoId!,
       worktree: wt.id,

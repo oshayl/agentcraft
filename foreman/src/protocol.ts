@@ -407,11 +407,12 @@ export const RepoAddMsg = z.object({ ...envelope('repo.add'), path: z.string().m
 export const RepoFixMsg = z.object({
   ...envelope('repo.fix'),
   action: z
-    .enum(['report', 'park', 'unpark', 'deps'])
+    .enum(['report', 'park', 'unpark', 'deps', 'review', 'land'])
     .describe(
-      'report: what currently blocks work in each repo. park: checkpoint-commit the base checkout\'s modified tracked files so a merge can land (untracked files are left alone; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout\'s node_modules into worktrees missing it, for sandboxes with no network',
+      'report: what currently blocks work in each repo. review: the uncommitted work in the base checkout (files, +/-, diff), so it can be read instead of only blocking. land: commit those modified tracked files under your own message. park: the same commit under an anonymous checkpoint subject, undoable with unpark (untracked files are left alone by all three; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout\'s node_modules into worktrees missing it, for sandboxes with no network',
     ),
   repoId: Id.optional().describe('the repo to act on; omitted = every registered repo'),
+  message: z.string().max(2000).optional().describe('land: the commit message for your own uncommitted work'),
 });
 
 export const PermissionModeSetMsg = z.object({
@@ -533,5 +534,11 @@ export const ENTITY_SCHEMAS = {
 
 /** Merge decision option labels (exact strings). */
 export const MERGE_OPTIONS = ['Merge', 'Request changes', 'Reject'] as const;
+/**
+ * Offered alongside "Merge" when the checkout holding the base branch has modified tracked
+ * files: those refuse a merge, and the user would otherwise have to leave the game to deal with
+ * them. Answering it commits their own work first (RepoManager.land), then merges.
+ */
+export const MERGE_WITH_LAND_OPTION = 'Commit my changes, then merge';
 /** Permission decision option labels (exact strings). */
 export const PERMISSION_OPTIONS = ['Allow once', 'Always allow for this agent', 'Deny'] as const;

@@ -1054,8 +1054,9 @@ Clear what is blocking work, from the console (`/fix [park|unpark|deps] [repo]`)
 | field | type | required | notes |
 | --- | --- | --- | --- |
 | `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
-| `action` | `report` \| `park` \| `unpark` \| `deps` | yes | report: what currently blocks work in each repo. park: checkpoint-commit the base checkout's modified tracked files so a merge can land (untracked files are left alone; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout's node_modules into worktrees missing it, for sandboxes with no network |
+| `action` | `report` \| `park` \| `unpark` \| `deps` \| `review` \| `land` | yes | report: what currently blocks work in each repo. review: the uncommitted work in the base checkout (files, +/-, diff), so it can be read instead of only blocking. land: commit those modified tracked files under your own message. park: the same commit under an anonymous checkpoint subject, undoable with unpark (untracked files are left alone by all three; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout's node_modules into worktrees missing it, for sandboxes with no network |
 | `repoId` | string | no | the repo to act on; omitted = every registered repo |
+| `message` | string | no | land: the commit message for your own uncommitted work |
 
 ```json
 {

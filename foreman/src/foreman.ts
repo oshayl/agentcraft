@@ -25,7 +25,8 @@ import type {
   Outbound,
   Station,
   Task, PermissionMode,} from './protocol.js';
-import { RepoError, RepoManager } from './repos.js';
+import { MERGE_WITH_LAND_OPTION } from './protocol.js';
+import { formatUncommittedReview, RepoError, RepoManager } from './repos.js';
 import { Store } from './store.js';
 import { TaskError, TaskGraph } from './taskgraph.js';
 import { setUserName, userName } from './user.js';
@@ -391,8 +392,15 @@ export class Foreman {
   private async applyMergeAnswer(d: Decision): Promise<void> {
     const task = d.taskId ? this.tasks.get(d.taskId) : undefined;
     const option = d.answer?.option;
-    if (option === 'Merge') {
+    if (option === 'Merge' || option === MERGE_WITH_LAND_OPTION) {
       try {
+        // The user chose to land their own uncommitted work first: it was blocking this merge,
+        // and the decision only offered this when committing it could not conflict with the
+        // incoming branch. A real commit in their name, not park's anonymous checkpoint.
+        if (option === MERGE_WITH_LAND_OPTION && d.repoId) {
+          const landed = await this.repos.land(d.repoId, `Your changes before merging ${d.taskId ?? 'agent work'}\n\nCommitted from AgentCraft so the agent branch could land.`);
+          this.bus.feed('merge', `Committed your own work first: ${landed}`, { agentId: d.agentId });
+        }
         const res = await this.repos.merge(d, task ? { commitMessage: `${task.id}: ${task.title}${task.summary ? `\n\n${task.summary}` : ''}` } : {});
         if (task) this.tasks.setStatus(task.id, 'done', { viaMerge: true, force: task.status !== 'review' });
         this.bus.feed('merge', `Merged ${res.branch} into ${res.base} (${res.sha}, ${res.files} file${res.files === 1 ? '' : 's'})`, { agentId: d.agentId });
@@ -570,13 +578,17 @@ export class Foreman {
           try {
             if (msg.action === 'report') {
               for (const l of await this.repos.fixReport(r.id)) lines.push(`${label}${l}`);
+            } else if (msg.action === 'review') {
+              for (const l of formatUncommittedReview(await this.repos.uncommittedReview(r.id))) lines.push(`${label}${l}`);
             } else {
               const verb =
                 msg.action === 'park'
                   ? await this.repos.park(r.id)
                   : msg.action === 'unpark'
                     ? await this.repos.unpark(r.id)
-                    : await this.repos.linkDeps(r.id);
+                    : msg.action === 'land'
+                      ? await this.repos.land(r.id, msg.message?.trim() || `Your changes on ${r.branch}\n\nCommitted from AgentCraft.`)
+                      : await this.repos.linkDeps(r.id);
               lines.push(`${label}${verb}`);
             }
           } catch (e) {
