@@ -5,6 +5,8 @@
 import type { ChildProcess } from 'node:child_process';
 import type { AgentTool, TurnHandle } from './tools.js';
 
+import type { AgentCapabilities } from '../capabilities.js';
+
 export type EngineId = 'claude' | 'codex';
 export const ENGINE_IDS: readonly EngineId[] = ['claude', 'codex'];
 export type Role = 'lead' | 'worker';
@@ -47,6 +49,8 @@ export interface TurnSpec {
   env: Record<string, string | undefined>;
   /** directories the agent may write besides cwd (a worktree's git dir, for commits) */
   writableRoots?: string[];
+  /** how far this agent may reach outside its worktree (see capabilities.ts); absent = closed */
+  capabilities?: AgentCapabilities;
   abort: AbortController;
   turn: TurnHandle;
   permission: PermissionGate;

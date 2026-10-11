@@ -27,6 +27,7 @@ import type { ClaudeConfig } from '../config.js';
 import { FOREMAN_VERSION } from '../config.js';
 import { ClientError, type Backend, type Foreman } from '../foreman.js';
 import { withGitSafety } from '../gitsafety.js';
+import { resolveCapabilities, type AgentCapabilities, type CapabilityConfig } from '../capabilities.js';
 import { agentGitIdentity } from '../util/git.js';
 import { classifyToolUse, describeRuleKey, describeToolCall } from '../policy.js';
 import type { BackendName, Decision, Goal, Task } from '../protocol.js';
@@ -104,6 +105,9 @@ function alive(child: ChildProcess | undefined): child is ChildProcess {
 const TURN_TIMEOUT_MS = 45 * 60_000;
 const LEAD = 'marlow';
 
+/** Reuse the user's `gh` login for agents' pushes; no token is placed in the environment. */
+const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
+
 /**
  * Environment for an agent's CLI process (and every command it runs): git refuses all
  * transports (no push, ever) and never signs; git does not walk up out of the agent's cwd; the
@@ -111,7 +115,7 @@ const LEAD = 'marlow';
  * never the user's; and each Bash call starts in the agent's own cwd, so a `cd` in one command
  * cannot carry the next one out of the worktree.
  */
-export function agentEnv(base: NodeJS.ProcessEnv = process.env, who: { agentId?: string; cwd?: string } = {}): Record<string, string | undefined> {
+export function agentEnv(base: NodeJS.ProcessEnv = process.env, who: { agentId?: string; cwd?: string; capabilities?: AgentCapabilities } = {}): Record<string, string | undefined> {
   return withGitSafety(
     base,
     {
@@ -119,7 +123,13 @@ export function agentEnv(base: NodeJS.ProcessEnv = process.env, who: { agentId?:
       CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: '1',
       ...(who.agentId ? (agentGitIdentity(who.agentId) as Record<string, string>) : {}),
     },
-    who.cwd ? { ceiling: path.dirname(path.resolve(who.cwd)) } : {},
+    {
+      ...(who.cwd ? { ceiling: path.dirname(path.resolve(who.cwd)) } : {}),
+      ...(who.capabilities?.network ? { network: true } : {}),
+      // Pushes authenticate through the user's GitHub CLI login rather than a token copied
+      // into the agent's environment, where the agent could read it.
+      ...(who.capabilities?.push ? { push: true, credentialHelper: GH_CREDENTIAL_HELPER } : {}),
+    },
   );
 }
 
@@ -138,6 +148,8 @@ export interface TeamOptions {
   skipAuthCheck?: boolean;
   /** injectable for tests: pull request intake (default: git + gh, see pulls.ts) */
   pullFetcher?: PullFetcher;
+  /** how far agents may reach outside their worktree (see capabilities.ts); default: closed */
+  capabilities?: CapabilityConfig;
 }
 
 export interface PullFetcher {
@@ -666,6 +678,19 @@ export class TeamBackend implements Backend {
     return { cwd: this.fm.repos.requireWorktree(t.repoId, t.worktree).path, role: 'worker' };
   }
 
+  /** How far one agent may reach outside its worktree (config.json "capabilities"). */
+  capsFor(agentId: string, role: Role): AgentCapabilities {
+    return resolveCapabilities(this.opts.capabilities, role, agentId);
+  }
+
+  /**
+   * Branches no agent may push to: every registered repository's base branch. Work reaches
+   * those through a merge decision the user answers, never through an agent's push.
+   */
+  private protectedBranches(): string[] {
+    return [...new Set(this.fm.repos.list().map((r) => r.branch).filter(Boolean))];
+  }
+
   /** The policy, and the user for whatever it cannot allow by itself (a permission decision). */
   private permissionGate(agentId: string, role: Role, cwd: string, turn: TurnHandle): PermissionGate {
     return async (toolName, input, signal, title) => {
@@ -678,6 +703,8 @@ export class TeamBackend implements Backend {
         alwaysAllow: this.fm.store.data.permissionRules[agentId] ?? [],
         mcpServer: TEAM_MCP_SERVER,
         leadReadCommands: this.cfg.leadReadCommands,
+        capabilities: this.capsFor(agentId, role),
+        protectedBranches: this.protectedBranches(),
       });
       if (verdict.action === 'allow') return { allow: true };
       if (verdict.action === 'deny') {
@@ -797,10 +824,10 @@ export class TeamBackend implements Backend {
       this.fm.store.markDirty();
 
       let systemAppend: string;
-      if (role === 'lead') systemAppend = leadSystemPrompt(this.fm, this.team);
+      if (role === 'lead') systemAppend = leadSystemPrompt(this.fm, this.team, this.capsFor(agentId, role));
       else {
         const t = this.fm.tasks.require(job.taskId!);
-        systemAppend = workerSystemPrompt(this.fm, agentId, this.fm.repos.requireWorktree(t.repoId!, t.worktree!));
+        systemAppend = workerSystemPrompt(this.fm, agentId, this.fm.repos.requireWorktree(t.repoId!, t.worktree!), this.capsFor(agentId, role));
       }
       const model = engine.model(role);
       this.fm.agentLog(agentId, 'text', `${resume ? 'Resuming' : 'Starting'} ${job.kind}${job.taskId ? ` ${job.taskId}` : ''} (${engine.id === 'claude' ? model : `${engine.label} ${model}`})`);
@@ -818,8 +845,9 @@ export class TeamBackend implements Backend {
           prompt,
           instructions: systemAppend,
           ...(resume ? { resume } : {}),
-          env: agentEnv(process.env, { agentId, cwd }),
+          env: agentEnv(process.env, { agentId, cwd, capabilities: this.capsFor(agentId, role) }),
           writableRoots: await this.writableRoots(role, job),
+          capabilities: this.capsFor(agentId, role),
           abort,
           turn,
           permission: this.permissionGate(agentId, role, cwd, turn),

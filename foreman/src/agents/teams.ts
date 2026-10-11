@@ -13,6 +13,7 @@ export function createTeam(fm: Foreman, cfg: Config): TeamBackend {
   const engine = (n: EngineName): Engine => (n === 'codex' ? (codex ??= new CodexEngine(fm, cfg.codex)) : (claude ??= new ClaudeEngine(fm, cfg.claude)));
   const byAgent = Object.fromEntries(Object.entries(cfg.engines.byAgent).map(([agent, n]) => [agent, engine(n)]));
   return new TeamBackend(fm, cfg.claude, {
+    capabilities: cfg.capabilities,
     name: cfg.backend === 'codex' ? 'codex' : 'claude',
     engines: { lead: engine(cfg.engines.lead), worker: engine(cfg.engines.worker), byAgent },
   });

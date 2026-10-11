@@ -1,4 +1,5 @@
 // Configuration: defaults < <AGENTCRAFT_HOME>/config.json < environment < CLI flags.
+import { CLOSED, type AgentCapabilities, type CapabilityConfig } from './capabilities.js';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,6 +76,31 @@ export interface SimConfig {
   ambient: boolean;
 }
 
+/** "network,push,mcp,web" (flag/env) or {"network": true} / ["network"] (config.json). */
+function capsFrom(v: unknown, label: string): Partial<AgentCapabilities> | undefined {
+  if (v === undefined || v === null) return undefined;
+  const names = typeof v === 'string' ? v.split(',') : Array.isArray(v) ? v.map(String) : undefined;
+  if (names) {
+    const out: Partial<AgentCapabilities> = {};
+    for (const raw of names) {
+      const n = raw.trim().toLowerCase();
+      if (!n) continue;
+      if (n === 'all') return { network: true, push: true, mcp: true, web: true };
+      if (n === 'none' || n === 'closed') return { ...CLOSED };
+      if (n !== 'network' && n !== 'push' && n !== 'mcp' && n !== 'web') throw new Error(`unknown ${label} capability "${raw.trim()}" (use network, push, mcp, web, all or none)`);
+      out[n] = true;
+    }
+    return out;
+  }
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const out: Partial<AgentCapabilities> = {};
+    for (const k of ['network', 'push', 'mcp', 'web'] as const) if (k in o) out[k] = !!o[k];
+    return out;
+  }
+  throw new Error(`${label} capabilities must be a list or an object`);
+}
+
 export interface Config {
   backend: BackendName;
   /** the person the team works for (prompts, feed, UI); default: the OS user name */
@@ -106,6 +132,8 @@ export interface Config {
   claude: ClaudeConfig;
   codex: CodexConfig;
   engines: EngineChoice;
+  /** how far agents may reach outside their worktree (see capabilities.ts); default: closed */
+  capabilities: CapabilityConfig;
   sim: SimConfig;
 }
 
@@ -252,6 +280,7 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv = process.env)
   const fileClaude = (file.claude ?? {}) as Record<string, unknown>;
   const fileSim = (file.sim ?? {}) as Record<string, unknown>;
   const fileCodex = (file.codex ?? {}) as Record<string, unknown>;
+  const fileCaps = (file.capabilities ?? {}) as Record<string, unknown>;
   const pick = (k: string, envKey?: string): unknown => flags[k] ?? (envKey ? env[envKey] : undefined) ?? file[k];
 
   const backendRaw = String(pick('backend', 'AGENTCRAFT_BACKEND') ?? 'claude');
@@ -324,6 +353,13 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv = process.env)
       lead: engineName(pick('lead-engine', 'AGENTCRAFT_LEAD_ENGINE') ?? (file.engines as Record<string, unknown> | undefined)?.lead, backend === 'codex' ? 'codex' : 'claude', 'lead engine'),
       worker: engineName(pick('worker-engine', 'AGENTCRAFT_WORKER_ENGINE') ?? (file.engines as Record<string, unknown> | undefined)?.worker, backend === 'codex' ? 'codex' : 'claude', 'worker engine'),
       byAgent: engineMap(flags.engines ?? env.AGENTCRAFT_ENGINES ?? (file.engines as Record<string, unknown> | undefined)?.byAgent),
+    },
+    capabilities: {
+      ...(capsFrom(flags['lead-caps'] ?? env.AGENTCRAFT_LEAD_CAPS ?? fileCaps.lead, 'lead') ? { lead: capsFrom(flags['lead-caps'] ?? env.AGENTCRAFT_LEAD_CAPS ?? fileCaps.lead, 'lead')! } : {}),
+      ...(capsFrom(flags['worker-caps'] ?? env.AGENTCRAFT_WORKER_CAPS ?? fileCaps.worker, 'worker') ? { worker: capsFrom(flags['worker-caps'] ?? env.AGENTCRAFT_WORKER_CAPS ?? fileCaps.worker, 'worker')! } : {}),
+      ...(fileCaps.byAgent && typeof fileCaps.byAgent === 'object'
+        ? { byAgent: Object.fromEntries(Object.entries(fileCaps.byAgent as Record<string, unknown>).map(([a, v]) => [a, capsFrom(v, a) ?? {}])) }
+        : {}),
     },
     sim: {
       speed: Math.max(0.05, num(flags.speed ?? env.AGENTCRAFT_SIM_SPEED ?? fileSim.speed, 1)),

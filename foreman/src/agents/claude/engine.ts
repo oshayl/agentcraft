@@ -8,6 +8,7 @@ import type { AuthCheck, Engine, Role, TurnSpec, TurnStats } from '../engine.js'
 import { detectApiAuth, NO_API_AUTH_MESSAGE, withAuthMode } from './auth.js';
 import { StreamMapper } from './stream.js';
 import { MCP_SERVER, mcpServer } from './tools.js';
+import { readUserMcpServers } from '../../usermcp.js';
 
 export class ClaudeEngine implements Engine {
   readonly id = 'claude' as const;
@@ -75,9 +76,16 @@ export class ClaudeEngine implements Engine {
       canUseTool,
       // the lead's Bash is read-only: the policy asks before anything that writes
       tools: role === 'lead' ? ['Read', 'Grep', 'Glob', 'Bash'] : ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'TodoWrite'],
-      // no allowedTools: every tool call (incl. our MCP tools) goes through canUseTool/policy
-      disallowedTools: ['Bash(git push:*)', 'Task', 'Agent', 'WebSearch', 'WebFetch'],
-      mcpServers: { [MCP_SERVER]: mcpServer(spec.tools) },
+      // no allowedTools: every tool call (incl. our MCP tools) goes through canUseTool/policy.
+      // Subagents are always off; the web tools and `git push` are off unless this agent has
+      // the matching capability, in which case the policy decides each call (capabilities.ts).
+      disallowedTools: [
+        'Task',
+        'Agent',
+        ...(spec.capabilities?.push ? [] : ['Bash(git push:*)']),
+        ...(spec.capabilities?.web ? [] : ['WebSearch', 'WebFetch']),
+      ],
+      mcpServers: { ...(spec.capabilities?.mcp ? readUserMcpServers() : {}), [MCP_SERVER]: mcpServer(spec.tools) },
       systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.instructions },
       abortController: abort,
       env: withAuthMode(spec.env, this.cfg.useClaudeLogin),

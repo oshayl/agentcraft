@@ -40,6 +40,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { GIT_REDIRECT_VARS } from './gitsafety.js';
+import type { AgentCapabilities } from './capabilities.js';
 import { isInsideOrEqual } from './util/fsx.js';
 
 export type Verdict =
@@ -64,6 +65,17 @@ export interface PolicyContext {
   tempDirs?: string[];
   /** lead only: command prefixes the user declared read-only, e.g. `bd show` */
   leadReadCommands?: string[];
+  /**
+   * How far this agent may reach outside its worktree (see capabilities.ts). Absent = closed:
+   * no transports, no pushes, which is the default AgentCraft ships.
+   */
+  capabilities?: AgentCapabilities;
+  /**
+   * Branches an agent may never push to even with the push capability, on top of the built-in
+   * main/master: usually each registered repository's base branch. Those land through an
+   * answered merge decision, never through a push.
+   */
+  protectedBranches?: string[];
 }
 
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead']);
@@ -933,6 +945,44 @@ function inlineCodeVerdict(cmd: string, code: string, sc: SegCtx): J {
   return ok(`${cmd} inline code (read-only)`, false);
 }
 
+/** Branches a push may never target: these land through a merge decision, not a push. */
+const BUILTIN_PROTECTED = ['main', 'master', 'trunk', 'develop', 'HEAD'];
+
+/** Push flags that rewrite or remove history on the remote, denied even with the capability. */
+const PUSH_DESTRUCTIVE = /^(-f|--force|--force-with-lease(=.*)?|--force-if-includes|--mirror|--all|--prune|--delete|-d|--tags-force)$/;
+
+/**
+ * What to do about a fully parsed `git push`. Without the push capability it is refused as
+ * before. With it, a push that cannot rewrite or remove the user's work becomes an ask: the
+ * user sees it in `ask` mode and can "Always allow", and `auto` mode skips the prompt. A push
+ * that force-updates, deletes, mirrors or targets a protected branch stays denied in both.
+ */
+function pushJudgment(rest: string[], sc: SegCtx): J {
+  const ctx = sc.env.ctx;
+  if (!ctx.capabilities?.push) return refuse(PUSH_DENY);
+  const protect = new Set([...BUILTIN_PROTECTED, ...(ctx.protectedBranches ?? [])].map((b) => b.toLowerCase()));
+  const args = rest.map((a) => a.replace(/\\(.)/g, '$1'));
+  for (const a of args) {
+    if (PUSH_DESTRUCTIVE.test(a)) return refuse(`git push ${a} can rewrite or remove work on the remote, which is never allowed for an agent (push the branch normally instead)`);
+  }
+  // Anything the parser cannot read (a variable, a substitution) could be any of the above.
+  if (args.some((a) => isDynamic(a))) return refuse(DYNAMIC_PUSH_DENY);
+  const refspecs = args.filter((a) => !a.startsWith('-'));
+  const remote = refspecs[0] ?? 'origin';
+  const specs = refspecs.slice(1);
+  for (const spec of specs) {
+    if (spec.startsWith('+')) return refuse('a leading "+" force-updates the remote branch, which is never allowed for an agent');
+    const [src, dst] = spec.includes(':') ? [spec.slice(0, spec.indexOf(':')), spec.slice(spec.indexOf(':') + 1)] : [spec, spec];
+    if (!src) return refuse('a push with an empty source deletes the remote branch, which is never allowed for an agent');
+    const branch = (dst || src).replace(/^refs\/heads\//, '');
+    if (protect.has(branch.toLowerCase())) return refuse(`${branch} is a protected branch: changes reach it through a merge decision you answer, not through a push`);
+  }
+  // No refspec: git pushes the current branch per push.default. The branch is the agent's own
+  // worktree branch (agentcraft/<agent>/<task>), never a protected one, but say so plainly.
+  const what = specs.length ? specs.join(' ') : 'the current branch';
+  return need(`push ${what} to ${remote}`, `Bash:git-push:${remote}:${specs.join(',') || 'current'}`);
+}
+
 /** git subcommands that push or speak to a remote for writing */
 const PUSH_SUBS = new Set(['push', 'send-pack', 'http-push', 'svn', 'p4', 'request-pull']);
 const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env', '--super-prefix', '--list-cmds', '--attr-source']);
@@ -1200,6 +1250,7 @@ function classifyGit(args: string[], sc: SegCtx): J {
   if (isDynamic(subWord)) return refuse(DYNAMIC_PUSH_DENY);
   const sub = subWord.toLowerCase();
   const rest = args.slice(i + 1);
+  if (sub === 'push') return merge(j, pushJudgment(rest, sc));
   if (PUSH_SUBS.has(sub)) return refuse(PUSH_DENY);
   const flagged = (re: RegExp) => rest.some((a) => re.test(a));
   // agents' commits are never signed (gitsafety.ts disables signing; refuse clearly instead)
@@ -1254,7 +1305,11 @@ function classifyGit(args: string[], sc: SegCtx): J {
     const pathsOut = !writesFile && (sub === 'ls-files' || (names && ['diff', 'ls-tree', 'status', 'grep', 'show', 'log', 'diff-tree'].includes(sub)));
     return done(`git ${sub}`, true, pathsOut ? { pathsOut: true } : {});
   }
-  if (GIT_NETWORK.has(sub)) return merge(j, exact(sc.env, `git ${sub} uses the network or other repositories (git transports are disabled for agents)`));
+  if (GIT_NETWORK.has(sub)) {
+    // With the network capability these are ordinary remote reads; ask (auto mode skips it).
+    if (sc.env.ctx.capabilities?.network) return merge(j, need(`git ${sub} (uses the network)`, `Bash:git-network:${sub}`));
+    return merge(j, exact(sc.env, `git ${sub} uses the network or other repositories (git transports are disabled for agents)`));
+  }
   const positional = rest.filter((a) => !a.startsWith('-'));
   const sub2 = (positional[0] ?? '').toLowerCase();
   switch (sub) {
@@ -1449,7 +1504,11 @@ function classifySegment(seg: Segment, vcwd: string, env: Env, substs: Subst[], 
   // shell keywords: `if x`, `then y`, `do z`, `! cmd`, `time cmd`; list headers are data
   while (words.length && ['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time', 'fi', 'done', 'esac', 'coproc'].includes(words[0]!)) words = words.slice(1);
   if (words.length && ['for', 'select', 'case', 'in'].includes(words[0]!)) words = [];
-  if (tokensHavePush(words)) return refuse(PUSH_DENY);
+  // A push anywhere in the token list is refused here, because a wrapper (env, xargs, timeout,
+  // sudo) would otherwise hide it from the git classifier. An agent with the push capability is
+  // the one exception, and only for a command that *starts* with git: then nothing is hidden and
+  // classifyGit parses the arguments properly (pushJudgment). A wrapped push stays refused.
+  if (tokensHavePush(words) && !(env.ctx.capabilities?.push && baseCmd(words[0] ?? '') === 'git')) return refuse(PUSH_DENY);
   const writes = lx.redirects.filter((r) => r.op === '>').map((r) => r.target);
   const reads = lx.redirects.filter((r) => r.op === '<').map((r) => r.target);
   const uw = unwrap(words);

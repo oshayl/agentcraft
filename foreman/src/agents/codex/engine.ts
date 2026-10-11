@@ -148,17 +148,19 @@ export class CodexEngine implements Engine {
   private threadConfig(userConfig: any, spec: TurnSpec, serverEnv: NodeJS.ProcessEnv): Record<string, unknown> {
     const off = (names: string[]) => Object.fromEntries(names.map((n) => [n, { enabled: false }]));
     const effort = spec.role === 'lead' ? this.cfg.leadEffort : this.cfg.effort;
+    const caps = spec.capabilities;
+    // With the mcp capability the agent keeps the user's own MCP servers and plugins; without
+    // it every one of them is switched off, which is AgentCraft's default.
     return {
-      mcp_servers: off(Object.keys(userConfig?.mcp_servers ?? {})),
-      plugins: off(Object.keys(userConfig?.plugins ?? {})),
+      ...(caps?.mcp ? {} : { mcp_servers: off(Object.keys(userConfig?.mcp_servers ?? {})), plugins: off(Object.keys(userConfig?.plugins ?? {})) }),
       features: Object.fromEntries(OFF_FEATURES.map((f) => [f, false])),
-      web_search: 'disabled',
+      web_search: caps?.web ? 'enabled' : 'disabled',
       notify: [],
       include_apps_instructions: false,
       // Preserve both the git-safety variables Codex normally filters and any values isolated
       // for the app-server itself (LOCALAPPDATA on Windows).
       shell_environment_policy: { set: { ...envDelta(spec.env), ...envDelta(spec.env, serverEnv) } },
-      sandbox_workspace_write: { writable_roots: spec.writableRoots ?? [], network_access: false },
+      sandbox_workspace_write: { writable_roots: spec.writableRoots ?? [], network_access: !!caps?.network },
       ...(effort ? { model_reasoning_effort: effort } : {}),
     };
   }
