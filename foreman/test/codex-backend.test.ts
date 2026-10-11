@@ -211,6 +211,36 @@ describe('codex engine (fake app-server)', () => {
     }
   });
 
+  // Codex's v2 approval response carries only a decision, so a policy refusal reaches the agent as
+  // a bare "rejected by user". Without the relay below an agent blocks a task over it, which is how
+  // a real review task stalled on `env -i` test commands.
+  it('relays a policy refusal to a Codex agent as a message, since its engine drops the reason', async () => {
+    const isolatedHome = tempDir();
+    const isolatedRepo = await demoRepo();
+    const isolated = makeForeman(isolatedHome, ['--backend', 'sim']);
+    try {
+      const repo = await isolated.fm.repos.add(isolatedRepo);
+      const task = isolated.fm.tasks.create({ title: 'relay', createdBy: 'marlow', repoId: repo.id, assignee: 'kit' });
+      const wt = await isolated.fm.repos.createWorktree(repo.id, 'kit', task);
+      task.worktree = wt.id;
+      const engine = new CodexEngine(isolated.fm, isolated.cfg.codex);
+      const backend = new TeamBackend(isolated.fm, isolated.cfg.claude, { name: 'codex', engines: { lead: engine, worker: engine } });
+      const turn = { signal: new AbortController().signal } as never;
+      const gate = backend['permissionGate']('kit', 'worker', wt.path, turn);
+
+      const before = isolated.fm.bus.inbox('kit').length;
+      const answer = await gate('Bash', { command: 'env -i npm test' }, new AbortController().signal, undefined);
+      expect(answer.allow).toBe(false);
+
+      const relayed = isolated.fm.bus.inbox('kit').slice(before);
+      expect(relayed).toHaveLength(1);
+      expect(relayed[0]!.text).toContain('rejected by user');
+      expect(relayed[0]!.text).toContain('env -i');
+    } finally {
+      await isolated.fm.close();
+    }
+  });
+
   it('refuses Git write grants when the worktree pointer names another worktree', async () => {
     const isolatedHome = tempDir();
     const isolatedRepo = await demoRepo();

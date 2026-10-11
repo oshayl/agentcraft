@@ -385,8 +385,18 @@ function git(cwd, args, date) {
 
 export function createDemo({ dir, force = false, quiet = false } = {}) {
   const target = path.resolve(dir ?? path.join(here, 'demo-app'));
-  const allowedRoots = [here, os.tmpdir()];
-  if (!allowedRoots.some((r) => isInside(target, r))) {
+  // Both sides resolved: on macOS os.tmpdir() is /var/folders/... while the real directory is
+  // /private/var/folders/..., so an already-resolved target would fail an unresolved comparison.
+  const resolve = (p) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const resolvedTarget = resolve(path.dirname(target));
+  const allowedRoots = [here, os.tmpdir()].map(resolve);
+  if (!allowedRoots.some((r) => isInside(target, r) || isInside(resolvedTarget, r))) {
     throw new Error(`refusing to create demo repo outside sandbox/ or the OS temp dir: ${target}`);
   }
   if (fs.existsSync(target)) {

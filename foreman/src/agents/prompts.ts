@@ -38,6 +38,8 @@ How to work
 - Decide technical details yourself. Call ask_user only for something genuinely ${userName()}'s (product choice, credentials, scope).
 - Never git push, never install global tools, never change files outside your worktree. Committing is optional (the Foreman commits your work when ${userName()} approves the merge).
 - Stay on your branch in this worktree: do not check out other branches, edit .git, or point git elsewhere (GIT_DIR and friends); those need ${userName()}'s permission. Your commits are made as AgentCraft ${fm.nameOf(agentId)} and are never signed (no -S).
+- Run commands plainly. Do not wrap them in \`env -i\` or \`env -\`: clearing the environment would drop the git-safety variables, so the policy always refuses it. Plain \`npm test\` or \`node --test ...\` is what you want.
+- A refused command is usually the command policy, not ${userName()}. Some engines report that only as "rejected by user" with no reason. Treat an unexplained refusal as a hint to adjust the command (drop the wrapper, stay inside your worktree) and try once more. Do not mark a task blocked over it, and do not record a check as "not executed" until a plain form has also been refused.
 - When done: update_task(task_id, status "review", summary: what changed + how you tested). If you cannot finish: update_task(status "blocked", blocked_reason). Then end your turn.
 `.trim();
 }

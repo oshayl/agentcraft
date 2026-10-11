@@ -682,6 +682,18 @@ export class TeamBackend implements Backend {
       if (verdict.action === 'allow') return { allow: true };
       if (verdict.action === 'deny') {
         this.fm.agentLog(agentId, 'error', `blocked: ${describeToolCall(toolName, input)} (${verdict.reason})`);
+        // Codex's v2 approval response carries a decision and nothing else
+        // (CommandExecutionRequestApprovalResponse has one field), so the reason below cannot
+        // ride along with the refusal the way it does for Claude's `deny { message }`. The agent
+        // would otherwise see only "rejected by user" and tends to give up on a task over it, so
+        // the reason is delivered as a message instead: its inbox reaches it mid turn.
+        if (this.engineFor(agentId).id === 'codex') {
+          this.fm.bus.send(
+            'system',
+            agentId,
+            `Your engine will report this only as "rejected by user", which is misleading: ${userName()} was not asked. AgentCraft's command policy refused ${describeToolCall(toolName, input)} because ${verdict.reason}. Adjust the command and try again rather than treating it as a block.`,
+          );
+        }
         return { allow: false, message: verdict.reason };
       }
       const prev = this.fm.agent(agentId);

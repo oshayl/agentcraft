@@ -12,7 +12,9 @@ import type { Outbound } from '../src/protocol.js';
 export const TEST_USER = 'Alex';
 
 export function tempDir(prefix = 'ac-test-'): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // Resolved, because the production code realpaths repository paths and macOS hands out
+  // /var/folders/... for a directory that really lives at /private/var/folders/...
+  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 export function rmrf(p: string): void {
