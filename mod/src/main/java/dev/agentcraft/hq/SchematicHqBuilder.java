@@ -84,7 +84,7 @@ public final class SchematicHqBuilder implements HqBuilder {
 		int groundY = lit.grassLine() >= 0 ? lit.grassLine() : lit.lowestSolid();
 		int y0 = GROUND - groundY;
 		int[] site = {SITE_X - MARGIN, Math.min(y0, GROUND - 4), SITE_Z - MARGIN,
-			SITE_X + lit.sizeX - 1 + MARGIN, Math.max(y0 + lit.sizeY - 1, GROUND + 12), SITE_Z + lit.sizeZ - 1 + MARGIN};
+			SITE_X + lit.sizeX - 1 + MARGIN, Math.max(y0 + lit.sizeY - 1, GROUND + 12) + Penthouse.HEIGHT + 3, SITE_Z + lit.sizeZ - 1 + MARGIN};
 		Plan p = new Plan(site[0], site[1], site[2], site[3], site[4], site[5], GROUND,
 			y -> y > GROUND ? Blocks.AIR.defaultBlockState()
 				: y == GROUND ? Blocks.GRASS_BLOCK.defaultBlockState()
@@ -100,12 +100,24 @@ public final class SchematicHqBuilder implements HqBuilder {
 		}
 
 		Floor floor = mainFloor(lit, y0);
-		// someone else's house becomes an office: one floor opened, fitted out, beds gone
+		// Someone else's house becomes an HQ: its beds go, the team gets a glass floor of its own
+		// on top (the rooms in here are bedroom-sized and a studio does not fit in one), and a
+		// spiral replaces the ladders so an agent can actually walk between the floors.
 		SchematicFitOut.stripBedrooms(p, SITE_X, y0, SITE_Z, SITE_X + lit.sizeX - 1, y0 + lit.sizeY - 1, SITE_Z + lit.sizeZ - 1);
-		List<SchematicFitOut.Spot> ring = SchematicFitOut.open(p, floor.y, floor.minX - 2, floor.minZ - 2, floor.maxX + 2, floor.maxZ + 2);
-		SchematicFitOut.office(p, floor.y, ring);
-		// the stations go in while the plan is still being written, so they apply with everything else
-		java.util.Set<String> fitted = SchematicFitOut.furnish(p, a, ring, new ArrayList<>(Cast.ids()));
+		int[] b = lit.building(groundY);
+		java.util.Set<String> fitted = new java.util.LinkedHashSet<>();
+		Penthouse.Room room = null;
+		if (b != null) {
+			room = Penthouse.build(p, y0 + b[4], SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3]);
+			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()));
+			int tx = SITE_X + b[2] + 2;
+			int tz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
+			Penthouse.spiral(p, tx, tz, GROUND + 1, room.y());
+			Amenities.lobby(p, a, tx, tz, GROUND, 2);
+			Amenities.poolside(p, a, SITE_X, SITE_Z, SITE_X + lit.sizeX - 1, SITE_Z + lit.sizeZ - 1, GROUND - 1);
+			fitted.addAll(a.names());
+			floor = new Floor(room.y(), (room.x0() + room.x1()) / 2, (room.z0() + room.z1()) / 2, room.x0(), room.z0(), room.x1(), room.z1());
+		}
 		List<StationPlacements.Placement> placed = StationPlacements.load(level.getServer(), id);
 		for (StationPlacements.Placement s : placed) {
 			BlockState block = blockFor(s);

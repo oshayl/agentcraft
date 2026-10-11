@@ -232,6 +232,11 @@ public final class Anchors {
 			return camera(camName, x, y, z, yaw, pitch);
 		}
 
+		/** The anchors written so far, so a builder can tell what it still has to fill in. */
+		public java.util.Set<String> names() {
+			return java.util.Set.copyOf(anchors.keySet());
+		}
+
 		public Builder bounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
 			this.bounds = new Bounds(Math.min(minX, maxX), Math.min(minY, maxY), Math.min(minZ, maxZ),
 				Math.max(minX, maxX), Math.max(minY, maxY), Math.max(minZ, maxZ));

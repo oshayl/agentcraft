@@ -91,6 +91,36 @@ public final class Litematic {
 		return bestN >= sizeX * sizeZ / 20 ? best : -1;
 	}
 
+	/**
+	 * The build's own footprint and roof above its ground line: the columns and the top the
+	 * house occupies, ignoring the terrain it was captured with. {@code {x0, z0, x1, z1, topY}}
+	 * in schematic coordinates, or null when there is nothing above ground.
+	 */
+	public int @org.jspecify.annotations.Nullable [] building(int groundY) {
+		int x0 = Integer.MAX_VALUE;
+		int z0 = Integer.MAX_VALUE;
+		int x1 = Integer.MIN_VALUE;
+		int z1 = Integer.MIN_VALUE;
+		int top = -1;
+		for (int y = groundY + 1; y < sizeY; y++) {
+			for (int x = 0; x < sizeX; x++) {
+				for (int z = 0; z < sizeZ; z++) {
+					BlockState s = at(x, y, z);
+					// plants and loose ground cover are not the building
+					if (s.isAir() || s.is(Blocks.GRASS_BLOCK) || s.is(Blocks.DIRT) || s.getBlock() instanceof net.minecraft.world.level.block.BushBlock) {
+						continue;
+					}
+					x0 = Math.min(x0, x);
+					z0 = Math.min(z0, z);
+					x1 = Math.max(x1, x);
+					z1 = Math.max(z1, z);
+					top = Math.max(top, y);
+				}
+			}
+		}
+		return top < 0 ? null : new int[] {x0, z0, x1, z1, top};
+	}
+
 	/** The lowest y holding anything at all (0 when the schematic starts solid). */
 	public int lowestSolid() {
 		for (int y = 0; y < sizeY; y++) {
