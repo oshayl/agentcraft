@@ -41,6 +41,8 @@ import org.jspecify.annotations.Nullable;
 final class HqCheck {
 	/** Anchors that are points on blocks or cameras, not places an agent stands. */
 	private static final Set<String> NOT_SPOTS = Set.of(AnchorNames.TASK_WALL, AnchorNames.DECISION_PODIUM, AnchorNames.GOAL_ATRIUM);
+	/** Anchors that are the player's, not the team's: the end of a parkour course is meant to be unwalkable. */
+	private static final String PLAYER_PREFIX = "parkour";
 
 	private HqCheck() {
 	}
@@ -56,7 +58,7 @@ final class HqCheck {
 
 	static boolean isSpot(String name) {
 		return !name.startsWith(AnchorNames.CAM_PREFIX) && !name.startsWith(AnchorNames.MONITOR_PREFIX) && !name.startsWith("seat_")
-			&& !NOT_SPOTS.contains(name) && !name.equals(AnchorNames.SPAWN);
+			&& !NOT_SPOTS.contains(name) || name.startsWith(PLAYER_PREFIX) && !name.equals(AnchorNames.SPAWN);
 	}
 
 	/** Seat block at the anchor (the agents' rule), or false. User spots never sit. */

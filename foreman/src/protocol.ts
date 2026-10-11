@@ -604,5 +604,11 @@ export const MERGE_OPTIONS = ['Merge', 'Request changes', 'Reject'] as const;
  * them. Answering it commits their own work first (RepoManager.land), then merges.
  */
 export const MERGE_WITH_LAND_OPTION = 'Commit my changes, then merge';
+/**
+ * Offered alongside "Merge" when the checkout has untracked files the branch also adds. Git will
+ * not overwrite a file it has no record of, so the merge cannot land until they move; answering
+ * with this moves them into `.agentcraft-superseded/<when>/`, keeping their paths, and merges.
+ */
+export const MERGE_WITH_ASIDE_OPTION = 'Move my copies aside, then merge';
 /** Permission decision option labels (exact strings). */
 export const PERMISSION_OPTIONS = ['Allow once', 'Always allow for this agent', 'Deny'] as const;

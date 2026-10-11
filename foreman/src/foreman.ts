@@ -28,7 +28,7 @@ import type {
   Outbound,
   Station,
   Task, PermissionMode,} from './protocol.js';
-import { MERGE_WITH_LAND_OPTION } from './protocol.js';
+import { MERGE_WITH_ASIDE_OPTION, MERGE_WITH_LAND_OPTION } from './protocol.js';
 import { formatUncommittedReview, RepoError, RepoManager } from './repos.js';
 import { Store } from './store.js';
 import { TaskError, TaskGraph } from './taskgraph.js';
@@ -405,7 +405,7 @@ export class Foreman {
   private async applyMergeAnswer(d: Decision): Promise<void> {
     const task = d.taskId ? this.tasks.get(d.taskId) : undefined;
     const option = d.answer?.option;
-    if (option === 'Merge' || option === MERGE_WITH_LAND_OPTION) {
+    if (option === 'Merge' || option === MERGE_WITH_LAND_OPTION || option === MERGE_WITH_ASIDE_OPTION) {
       try {
         // The user chose to land their own uncommitted work first: it was blocking this merge,
         // and the decision only offered this when committing it could not conflict with the
@@ -413,6 +413,15 @@ export class Foreman {
         if (option === MERGE_WITH_LAND_OPTION && d.repoId) {
           const landed = await this.repos.land(d.repoId, `Your changes before merging ${d.taskId ?? 'agent work'}\n\nCommitted from AgentCraft so the agent branch could land.`);
           this.bus.feed('merge', `Committed your own work first: ${landed}`, { agentId: d.agentId });
+        }
+        // Files they had locally that the branch also adds: git will not overwrite a file it has
+        // no record of, so they move - into .agentcraft-superseded/<when>/, paths kept. Nothing
+        // is deleted; the user is told exactly where their copies went.
+        if (option === MERGE_WITH_ASIDE_OPTION && d.repoId && d.worktree) {
+          const aside = await this.repos.setAsideUntracked(d.repoId, d.worktree);
+          if (aside.files.length) {
+            this.bus.feed('merge', `Moved ${aside.files.length} of your uncommitted file(s) to ${aside.dir} so the branch could land: ${aside.files.slice(0, 4).join(', ')}${aside.files.length > 4 ? ', ...' : ''}`, { agentId: d.agentId });
+          }
         }
         const res = await this.repos.merge(d, task ? { commitMessage: `${task.id}: ${task.title}${task.summary ? `\n\n${task.summary}` : ''}` } : {});
         if (task) this.tasks.setStatus(task.id, 'done', { viaMerge: true, force: task.status !== 'review' });

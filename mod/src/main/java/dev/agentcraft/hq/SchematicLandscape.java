@@ -43,7 +43,19 @@ final class SchematicLandscape {
 	 * Hills, then trees and undergrowth on them. Runs before the schematic is stamped, so the
 	 * build always wins over the landscape where the two meet.
 	 */
+	/** A ring the trees leave alone, so something can be built in it and still be seen. */
+	record Glade(int cx, int cz, int inner, int outer) {
+		boolean holds(int x, int z) {
+			double d = Math.hypot(x - cx, z - cz);
+			return d >= inner && d <= outer;
+		}
+	}
+
 	static void shape(Plan p, int ground, Flat flat) {
+		shape(p, ground, flat, null);
+	}
+
+	static void shape(Plan p, int ground, Flat flat, @org.jspecify.annotations.Nullable Glade glade) {
 		int nx = p.maxX - p.minX + 1;
 		int nz = p.maxZ - p.minZ + 1;
 		int[] hs = new int[nx * nz];
@@ -66,7 +78,7 @@ final class SchematicLandscape {
 				p.setTop(x, z, ground + h);
 			}
 		}
-		plant(p, ground, flat);
+		plant(p, ground, flat, glade);
 	}
 
 	/**
@@ -116,7 +128,7 @@ final class SchematicLandscape {
 	}
 
 	/** Trees on the slopes, grass and flowers everywhere outside the build. */
-	private static void plant(Plan p, int ground, Flat flat) {
+	private static void plant(Plan p, int ground, Flat flat, @org.jspecify.annotations.Nullable Glade glade) {
 		for (int x = p.minX + 1; x <= p.maxX - 1; x++) {
 			for (int z = p.minZ + 1; z <= p.maxZ - 1; z++) {
 				double d = flat.distance(x, z);
@@ -135,7 +147,8 @@ final class SchematicLandscape {
 				double stand = HqLandscape.smooth(APRON, RISE + 2, d) * HqLandscape.smooth(0, FALL + 4, edge);
 				double clumps = 0.5 + 0.5 * Math.sin(x * 0.07 + Math.cos(z * 0.06) * 2.2);
 				double density = 0.008 + 0.085 * stand * (0.45 + 0.55 * clumps) + 0.015 * Math.min(1, h / 4.0);
-				if (r < density && spaced(x, z)) {
+				// a glade keeps its trees down: something is built in there to be looked at
+				if (r < density && spaced(x, z) && (glade == null || !glade.holds(x, z))) {
 					HqLandscape.tree(p, x, z, kind(x, z), 9100);
 					continue;
 				}

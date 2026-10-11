@@ -31,7 +31,7 @@ import { describeCapabilities, resolveCapabilities, withRepoCapabilities, type A
 import { agentGitIdentity } from '../util/git.js';
 import { classifyToolUse, describeRuleKey, describeToolCall } from '../policy.js';
 import type { BackendName, Decision, Goal, Task } from '../protocol.js';
-import { MERGE_OPTIONS, MERGE_WITH_LAND_OPTION, PERMISSION_OPTIONS } from '../protocol.js';
+import { MERGE_OPTIONS, MERGE_WITH_ASIDE_OPTION, MERGE_WITH_LAND_OPTION, PERMISSION_OPTIONS } from '../protocol.js';
 import type { TestResult } from '../repos.js';
 import { renderDiffText } from '../diff.js';
 import { formatInbox } from '../bus.js';
@@ -1133,6 +1133,15 @@ export class TeamBackend implements Backend {
     const mine = await this.fm.repos.uncommittedReview(t.repoId!, wt.branch).catch(() => undefined);
     const blocked = !!mine?.files.length;
     const clash = blocked && !!mine?.overlapping?.length;
+    // Files they have but never committed that this branch also adds. Git refuses to overwrite
+    // those, so the merge would die at the last step with a message about moving them; better to
+    // say so here, with the option that handles it.
+    const inTheWay = await this.fm.repos.collidingUntracked(t.repoId!, wt.id).catch(() => []);
+    const inTheWayNote = inTheWay.length
+      ? `\n\n${inTheWay.length} file(s) you have in ${wt.base} but never committed are the same files this branch adds, so git will not let the merge overwrite them: ${inTheWay
+          .slice(0, 6)
+          .join(', ')}${inTheWay.length > 6 ? `, +${inTheWay.length - 6} more` : ''}. "${MERGE_WITH_ASIDE_OPTION}" keeps your copies - they move to .agentcraft-superseded/<when>/ with their paths - and lands the branch.`
+      : '';
     const yours = blocked
       ? `\n\nYour own uncommitted work on ${mine!.branch} (${mine!.files.length} file${mine!.files.length === 1 ? '' : 's'}, +${mine!.additions} -${mine!.deletions}) blocks this merge: ${mine!.files
           .slice(0, 8)
@@ -1149,8 +1158,12 @@ export class TeamBackend implements Backend {
       question: `Merge ${t.id} "${t.title}" (${wt.branch}) into ${wt.base}?`,
       // the extra option only exists while the user's own work is in the way, and only when
       // committing it cannot conflict with the branch being merged
-      options: blocked && !clash ? [MERGE_OPTIONS[0], MERGE_WITH_LAND_OPTION, ...MERGE_OPTIONS.slice(1)] : [...MERGE_OPTIONS],
-      context: `${summary}\n${wt.files} files, +${wt.additions} -${wt.deletions} | tests: ${t.ci}${yours}`,
+      options: inTheWay.length
+        ? [MERGE_OPTIONS[0], MERGE_WITH_ASIDE_OPTION, ...MERGE_OPTIONS.slice(1)]
+        : blocked && !clash
+          ? [MERGE_OPTIONS[0], MERGE_WITH_LAND_OPTION, ...MERGE_OPTIONS.slice(1)]
+          : [...MERGE_OPTIONS],
+      context: `${summary}\n${wt.files} files, +${wt.additions} -${wt.deletions} | tests: ${t.ci}${yours}${inTheWayNote}`,
       taskId: t.id,
       repoId: t.repoId!,
       worktree: wt.id,

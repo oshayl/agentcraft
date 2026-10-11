@@ -51,12 +51,41 @@ describe('uncommittedReview', () => {
     write(f, original);
   });
 
-  it('reports untracked files separately: they never block a merge', async () => {
+  it('reports untracked files separately, and does not promise they are harmless', async () => {
     write('a-brand-new-file.txt', 'scratch\n');
     const rev = await h.fm.repos.uncommittedReview(repoId);
     expect(rev.files).toEqual([]);
     expect(rev.untracked).toContain('a-brand-new-file.txt');
-    expect(formatUncommittedReview(rev)[0]).toMatch(/never block/);
+    // this used to read "they never block a merge", which is true until a branch adds the same
+    // file - and then git aborts the merge at the last step
+    expect(formatUncommittedReview(rev)[0]).toMatch(/only block if the branch adds the same ones/);
+  });
+
+  // The real case: the user has files locally that an agent's branch also adds. Git refuses to
+  // overwrite a file it has no record of, so a merge that looked fine dies with "please move or
+  // remove them before you merge".
+  it('finds untracked files that the branch would overwrite, and moves them aside', async () => {
+    const wt = await h.fm.repos.createWorktree(repoId, 'kit', h.fm.tasks.create({ title: 'adds a file', createdBy: 'marlow', repoId, assignee: 'kit' }));
+    fs.writeFileSync(path.join(wt.path, 'shared-name.txt'), 'the agent version\n');
+    await h.fm.repos.commitAll(repoId, wt.id, 'agent adds a file');
+
+    write('shared-name.txt', 'my own version\n');
+    const clashing = await h.fm.repos.collidingUntracked(repoId, wt.id);
+    expect(clashing).toEqual(['shared-name.txt']);
+
+    const check = await h.fm.repos.canMerge(repoId, wt.id);
+    expect(check.ok, 'the merge is refused before it is attempted').toBe(false);
+    if (!check.ok) {
+      expect(check.code).toBe('untracked');
+      expect(check.reason).toContain('shared-name.txt');
+    }
+
+    const aside = await h.fm.repos.setAsideUntracked(repoId, wt.id);
+    expect(aside.files).toEqual(['shared-name.txt']);
+    // nothing of theirs is destroyed: the file moved, with its path kept
+    expect(fs.readFileSync(path.join(aside.dir, 'shared-name.txt'), 'utf8')).toBe('my own version\n');
+    expect(fs.existsSync(path.join(repoPath, 'shared-name.txt'))).toBe(false);
+    expect((await h.fm.repos.canMerge(repoId, wt.id)).ok, 'and now it can merge').toBe(true);
   });
 
   it('flags overlap with the branch waiting to merge, and its absence', async () => {

@@ -13,11 +13,12 @@
 //  - removing a finished worktree's directory never fails an operation (busy dirs are retried
 //    later) and never deletes anything outside the worktree root
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Ctx } from './context.js';
 import { parseUnifiedDiff, type ParsedDiff } from './diff.js';
-import { MERGE_WITH_LAND_OPTION } from './protocol.js';
+import { MERGE_WITH_ASIDE_OPTION, MERGE_WITH_LAND_OPTION } from './protocol.js';
 import type { CiStatus, Decision, Repo, Worktree } from './protocol.js';
 import { withGitSafety } from './gitsafety.js';
 import { ensureDir, isInsideOrEqual } from './util/fsx.js';
@@ -28,8 +29,8 @@ import { slugify, tailLines } from './util/text.js';
 export class RepoError extends Error {
   constructor(
     message: string,
-    readonly code: 'not_found' | 'not_git' | 'no_commits' | 'refused' | 'conflict' | 'dirty' | 'empty' | 'failed' = 'failed',
-    /** code 'conflict': the files that would conflict */
+    readonly code: 'not_found' | 'not_git' | 'no_commits' | 'refused' | 'conflict' | 'dirty' | 'empty' | 'untracked' | 'failed' = 'failed',
+    /** code 'conflict': the files that would conflict; code 'untracked': the ones in the way */
     readonly files: string[] = [],
   ) {
     super(message);
@@ -167,12 +168,12 @@ export interface UncommittedReview {
  */
 export function formatUncommittedReview(rev: UncommittedReview, diffLines = 40): string[] {
   if (!rev.files.length) {
-    return [`${rev.branch}: nothing uncommitted that blocks a merge${rev.untracked.length ? ` (${rev.untracked.length} untracked file(s), which never block)` : ''}`];
+    return [`${rev.branch}: nothing uncommitted that blocks a merge${rev.untracked.length ? ` (${rev.untracked.length} untracked file(s), which only block if the branch adds the same ones)` : ''}`];
   }
   const out = [`${rev.branch}: ${rev.files.length} modified file(s), +${rev.additions} -${rev.deletions} (these block merges)`];
   for (const f of rev.files.slice(0, 20)) out.push(`  ${f.status || 'M'} ${f.path} +${f.additions} -${f.deletions}`);
   if (rev.files.length > 20) out.push(`  ... and ${rev.files.length - 20} more`);
-  if (rev.untracked.length) out.push(`  (${rev.untracked.length} untracked file(s) are left alone: they never block a merge)`);
+  if (rev.untracked.length) out.push(`  (${rev.untracked.length} untracked file(s) are left alone, unless a branch adds the same ones)`);
   if (rev.overlapping?.length) out.push(`  careful: ${rev.against} changes the same file(s): ${rev.overlapping.join(', ')}`);
   else if (rev.against) out.push(`  ${rev.against} changes none of these, so committing them cannot conflict with it`);
   const body = rev.diff.split('\n').filter(Boolean);
@@ -321,7 +322,7 @@ export class RepoManager {
     if (modified.length) {
       out.push(`${modified.length} modified file(s) on ${r.branch} block merges - /fix park`);
     } else {
-      out.push(`merges can land (${untracked.length} untracked file(s), which never block)`);
+      out.push(`merges can land (${untracked.length} untracked file(s), which only block if the branch adds the same ones)`);
     }
 
     const stale = await this.worktreesMissingDeps(r);
@@ -781,7 +782,63 @@ export class RepoManager {
       return { ok: false, reason: `merge would conflict in: ${files.join(', ') || '(unknown files)'}`, code: 'conflict', files };
     }
     if (mt.code !== 0) return { ok: false, reason: `merge-tree failed: ${mt.stderr.trim()}`, code: 'failed' };
+    const colliding = await this.collidingUntracked(repoId, worktreeId);
+    if (colliding.length) {
+      return {
+        ok: false,
+        reason: `${colliding.length} file(s) you have in ${w.base} but never committed are the same files this branch adds, and git will not overwrite them: ${colliding.slice(0, 4).join(', ')}${colliding.length > 4 ? `, +${colliding.length - 4} more` : ''}`,
+        code: 'untracked',
+        files: colliding,
+      };
+    }
     return { ok: true };
+  }
+
+  /**
+   * Files sitting untracked in the checkout that this branch also adds.
+   *
+   * <p>Git refuses a merge that would overwrite an untracked file rather than clobber work it
+   * has no record of, and says so in a way that stops the merge dead. This answers the same
+   * question before the merge runs, so the decision can offer a way through instead of failing
+   * at the last step. (The earlier code told the user untracked files "never block a merge",
+   * which is true right up until the branch adds a file they already have.)
+   */
+  async collidingUntracked(repoId: string, worktreeId: string): Promise<string[]> {
+    const r = this.require(repoId);
+    const w = this.requireWorktree(repoId, worktreeId);
+    const target = await this.checkoutOf(r, w.base);
+    if (!target) return [];
+    const incoming = new Set(
+      (await gitOut(r.path, ['diff', '--name-only', `${w.base}...${w.branch}`])).split('\n').map((l) => l.trim()).filter(Boolean),
+    );
+    if (!incoming.size) return [];
+    const untracked = (await git(target, ['ls-files', '--others', '--exclude-standard'], { allowFail: true })).stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    return untracked.filter((f) => incoming.has(f)).sort();
+  }
+
+  /**
+   * Moves those files out of the way into `.agentcraft-superseded/<when>/`, keeping their paths,
+   * so the merge can land and nothing the user wrote is destroyed. Returns where they went.
+   */
+  async setAsideUntracked(repoId: string, worktreeId: string): Promise<{ dir: string; files: string[] }> {
+    const r = this.require(repoId);
+    const w = this.requireWorktree(repoId, worktreeId);
+    const target = (await this.checkoutOf(r, w.base)) ?? r.path;
+    const files = await this.collidingUntracked(repoId, worktreeId);
+    if (!files.length) return { dir: '', files: [] };
+    const stamp = new Date(this.ctx.now()).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const dir = path.join(target, '.agentcraft-superseded', stamp);
+    for (const rel of files) {
+      const from = path.join(target, rel);
+      const to = path.join(dir, rel);
+      await fsp.mkdir(path.dirname(to), { recursive: true });
+      await fsp.rename(from, to);
+    }
+    this.ctx.log.info(`moved ${files.length} untracked file(s) aside into ${dir} so ${w.branch} could merge`);
+    return { dir, files };
   }
 
   /**
@@ -795,7 +852,8 @@ export class RepoManager {
 
   private async doMerge(decision: Decision, commitMessage?: string): Promise<MergeResult> {
     if (decision.kind !== 'merge') throw new RepoError('merge requires a merge decision', 'refused');
-    if (decision.status !== 'answered' || !(decision.answer?.option === 'Merge' || decision.answer?.option === MERGE_WITH_LAND_OPTION)) {
+    if (decision.status !== 'answered' || !(decision.answer?.option === 'Merge' || decision.answer?.option === MERGE_WITH_LAND_OPTION
+      || decision.answer?.option === MERGE_WITH_ASIDE_OPTION)) {
       throw new RepoError(`decision ${decision.id} does not approve a merge`, 'refused');
     }
     if (!decision.repoId || !decision.worktree) throw new RepoError(`decision ${decision.id} names no repo/worktree`, 'refused');

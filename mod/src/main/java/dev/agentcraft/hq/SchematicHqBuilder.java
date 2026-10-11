@@ -43,6 +43,9 @@ public final class SchematicHqBuilder implements HqBuilder {
 	private static final int SITE_Z = -20;
 	/** Land around the build: room for the hills to rise and come back down (SchematicLandscape). */
 	private static final int MARGIN = 38;
+	/** The band the parkour runs in, and the glade the trees leave for it. */
+	private static final int COURSE_INNER = 21;
+	private static final int COURSE_OUTER = 28;
 	/** A ceiling this close above means a cell is indoors rather than on a roof. */
 	private static final int CEILING = 8;
 
@@ -102,7 +105,10 @@ public final class SchematicHqBuilder implements HqBuilder {
 				: y == GROUND ? Blocks.GRASS_BLOCK.defaultBlockState()
 				: y >= GROUND - 3 ? Blocks.DIRT.defaultBlockState() : Blocks.STONE.defaultBlockState());
 		// the land first, so the build always wins where the two meet
-		SchematicLandscape.shape(p, GROUND, new SchematicLandscape.Flat(SITE_X - 1, SITE_Z - 1, SITE_X + lit.sizeX, SITE_Z + lit.sizeZ));
+		int courseX = SITE_X + lit.sizeX / 2;
+		int courseZ = SITE_Z + lit.sizeZ / 2;
+		SchematicLandscape.shape(p, GROUND, new SchematicLandscape.Flat(SITE_X - 1, SITE_Z - 1, SITE_X + lit.sizeX, SITE_Z + lit.sizeZ),
+			new SchematicLandscape.Glade(courseX, courseZ, COURSE_INNER - 4, COURSE_OUTER + 4));
 		for (int x = 0; x < lit.sizeX; x++) {
 			for (int y = 0; y < lit.sizeY; y++) {
 				for (int z = 0; z < lit.sizeZ; z++) {
@@ -137,17 +143,25 @@ public final class SchematicHqBuilder implements HqBuilder {
 				Amenities.passage(p, tx - 2, tz, SITE_X + b[2], poolDeck);
 			}
 			Amenities.lobby(p, a, tx, tz, GROUND, 2);
+			// somewhere to be while the team works: a run through the grounds, out past the woods
+			int hcx = (SITE_X + b[0] + SITE_X + b[2]) / 2;
+			int hcz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
+			Parkour.build(p, a, hcx, hcz, GROUND, COURSE_INNER, COURSE_OUTER);
+			Parkour.approach(p, tx + 5, tz, hcx + COURSE_INNER, hcz, GROUND);
 			fitted.addAll(a.names());
 			floor = new Floor(room.y(), (room.x0() + room.x1()) / 2, (room.z0() + room.z1()) / 2, room.x0(), room.z0(), room.x1(), room.z1());
 		}
 		List<StationPlacements.Placement> placed = StationPlacements.load(level.getServer(), id);
 		for (StationPlacements.Placement s : placed) {
 			BlockState block = blockFor(s);
-			if (block != null) {
-				p.set(s.x(), s.y(), s.z(), block);
-				if (!s.binding().isEmpty()) {
-					p.bind(s.x(), s.y(), s.z(), s.binding());
-				}
+			if (block == null) {
+				continue;
+			}
+			p.set(s.x(), s.y(), s.z(), block);
+			// the goal lamp is useless unbound: its renderer looks for this to draw the hologram
+			String binding = !s.binding().isEmpty() ? s.binding() : s.station().equals(AnchorNames.GOAL_ATRIUM) ? "goal:atrium" : "";
+			if (!binding.isEmpty()) {
+				p.bind(s.x(), s.y(), s.z(), binding);
 			}
 		}
 		p.settleGrass();
@@ -184,6 +198,9 @@ public final class SchematicHqBuilder implements HqBuilder {
 			case AnchorNames.MERGESTATION -> ModBlocks.MERGE_STATION.defaultBlockState().setValue(FacingEntityBlock.FACING, f);
 			case AnchorNames.TASK_WALL -> ModBlocks.TASK_BOARD.defaultBlockState().setValue(FacingEntityBlock.FACING, f);
 			case AnchorNames.DECISION_PODIUM -> ModBlocks.DECISION_PODIUM.defaultBlockState().setValue(HorizontalDirectionalBlock.FACING, f);
+			// the goal hologram's projector: /agentcraft here goal_atrium moves it anywhere
+			case AnchorNames.GOAL_ATRIUM -> ModBlocks.STATUS_LAMP.defaultBlockState()
+				.setValue(dev.agentcraft.block.StatusLampBlock.STATUS, dev.agentcraft.block.LampStatus.IDLE);
 			default -> s.station().startsWith(AnchorNames.MONITOR_PREFIX)
 				? ModBlocks.MONITOR.defaultBlockState().setValue(FacingEntityBlock.FACING, f)
 				: null;
