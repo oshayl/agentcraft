@@ -43,6 +43,8 @@ public final class HqFeature {
 		// A fresh HQ world (no saved layout yet) gets the default HQ built before the player joins, so
 		// the first launch walks straight into it. AGENTCRAFT_HQ_AUTOBUILD=0 turns this off.
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+			// the world remembers which HQ it is in, so a restart does not move the team back
+			HqChoice.apply(server);
 			if (!HqWorld.isHq(server) || !Anchors.current().isEmpty() || !autoBuild()) {
 				return;
 			}
@@ -60,6 +62,36 @@ public final class HqFeature {
 		AgentCraftCommands.sub(root -> root.then(Commands.literal("hq")
 			.executes(ctx -> build(ctx, HqBuilders.defaultId(), false))
 			.then(Commands.literal("force").executes(ctx -> build(ctx, HqBuilders.defaultId(), true)))
+			// repair: put every block of this HQ back as the builder meant it, including the ones
+			// someone (or something) broke, and say what changed
+			.then(Commands.literal("repair").executes(ctx -> build(ctx, HqBuilders.defaultId(), true)))
+			// what this world uses from now on, remembered across restarts
+			.then(Commands.literal("default")
+				.then(Commands.argument("builder", StringArgumentType.word())
+					.suggests((ctx, b) -> {
+						HqBuilders.ids().forEach(b::suggest);
+						return b.buildFuture();
+					})
+					.executes(ctx -> {
+						String id = StringArgumentType.getString(ctx, "builder");
+						if (HqBuilders.get(id) == null) {
+							ctx.getSource().sendFailure(Component.literal("Unknown HQ builder '" + id + "' (known: " + HqBuilders.ids() + ")"));
+							return 0;
+						}
+						HqBuilders.setDefault(id);
+						HqChoice.write(ctx.getSource().getServer(), id);
+						ctx.getSource().sendSuccess(() -> Component.literal("This world's HQ is '" + id + "' from now on. /agentcraft hq builds it."), true);
+						return 1;
+					})))
+			// take an HQ back out of the world: its site returns to meadow. Deterministic
+			// builders, so nothing is lost - /agentcraft hq <id> puts it back exactly.
+			.then(Commands.literal("remove")
+				.then(Commands.argument("builder", StringArgumentType.word())
+					.suggests((ctx, b) -> {
+						HqBuilders.ids().forEach(b::suggest);
+						return b.buildFuture();
+					})
+					.executes(ctx -> remove(ctx, StringArgumentType.getString(ctx, "builder")))))
 			.then(Commands.argument("builder", StringArgumentType.word())
 				.suggests((ctx, b) -> {
 					HqBuilders.ids().forEach(b::suggest);
@@ -106,6 +138,39 @@ public final class HqFeature {
 		ctx.getSource().sendSuccess(() -> Component.literal("Placed " + station + " at " + pos.getX() + " " + pos.getY() + " " + pos.getZ()
 			+ " facing " + facing.getSerializedName() + " for HQ '" + builderId + "'. Run /agentcraft hq " + builderId + " to build it."), true);
 		return 1;
+	}
+
+	/**
+	 * Clears an HQ's site back to the meadow, using the plan that build left behind. Only that
+	 * site, and only what the build put there.
+	 */
+	private static int remove(CommandContext<CommandSourceStack> ctx, String id) {
+		String refused = refusal(ctx.getSource());
+		if (refused != null) {
+			ctx.getSource().sendFailure(Component.literal(refused));
+			return 0;
+		}
+		if (id.equals(HqBuilders.defaultId())) {
+			ctx.getSource().sendFailure(Component.literal("'" + id + "' is this world's HQ. Choose another with /agentcraft hq default <id> first."));
+			return 0;
+		}
+		HqBuilder builder = HqBuilders.get(id);
+		int[] box = builder == null ? null : builder.site();
+		if (box == null) {
+			ctx.getSource().sendFailure(Component.literal("'" + id + "' does not know which ground it owns, so it cannot be removed."));
+			return 0;
+		}
+		int ground = dev.agentcraft.world.HqWorld.SURFACE_Y;
+		Plan meadow = new Plan(box[0], box[1], box[2], box[3], box[4], box[5], ground,
+			y -> y > ground ? net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()
+				: y == ground ? net.minecraft.world.level.block.Blocks.GRASS_BLOCK.defaultBlockState()
+				: y >= ground - 3 ? net.minecraft.world.level.block.Blocks.DIRT.defaultBlockState()
+				: net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+		meadow.settleGrass();
+		int cleared = meadow.apply(ctx.getSource().getLevel(), null, true).changed();
+		ctx.getSource().sendSuccess(() -> Component.literal("Removed '" + id + "': " + cleared + " blocks back to meadow. /agentcraft hq " + id
+			+ " builds it again."), true);
+		return cleared;
 	}
 
 	private static boolean autoBuild() {

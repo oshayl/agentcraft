@@ -22,6 +22,14 @@ public interface HqBuilder {
 	void build(ServerLevel level, Anchors.Builder anchors);
 
 	/**
+	 * The box this builder owns, {@code {minX, minY, minZ, maxX, maxY, maxZ}}, or null when it
+	 * does not know before building. Used to take an HQ back out of a world.
+	 */
+	default int @org.jspecify.annotations.Nullable [] site() {
+		return null;
+	}
+
+	/**
 	 * How a build was asked for: {@code force} = reset every cell of the site to the plan, even the
 	 * ones the player changed since the last build (builders that keep such cells honour it).
 	 */

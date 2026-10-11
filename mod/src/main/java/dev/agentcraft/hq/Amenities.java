@@ -52,24 +52,24 @@ final class Amenities {
 		int sx = cx + towerRadius + 2;
 		for (int dz = -2; dz <= 2; dz++) {
 			for (int dx = -1; dx <= 1; dx++) {
-				p.set(sx + dx, y - 1, cz + dz, St.carpet(Math.abs(dz) == 2 ? DyeColor.BROWN : DyeColor.LIGHT_GRAY));
+				p.set(sx + dx, y, cz + dz, St.carpet(Math.abs(dz) == 2 ? DyeColor.BROWN : DyeColor.LIGHT_GRAY));
 			}
 		}
-		p.set(sx, y - 1, cz, St.slab(Blocks.DARK_OAK_SLAB, true));
-		p.set(sx, y, cz, St.lantern(Blocks.LANTERN, false));
-		for (int dx = -1; dx <= 1; dx++) {
-			p.set(sx + dx, y - 1, cz - 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
-			a.put(AnchorNames.slot(AnchorNames.LOUNGE, dx == 0 ? 3 : 9 + dx), sx + dx + 0.5, y - 1, cz - 1.5, Direction.SOUTH.toYRot(), 0);
-			p.set(sx + dx, y - 1, cz + 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
+		p.set(sx, y, cz, St.slab(Blocks.DARK_OAK_SLAB, true));
+		p.set(sx, y + 1, cz, St.lantern(Blocks.LANTERN, false));
+		for (int dx = -1; dx <= 1; dx += 2) {
+			p.set(sx + dx, y, cz - 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
+			p.set(sx + dx, y, cz + 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
 		}
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 4), sx + 0.5, y - 1, cz + 2.5, Direction.NORTH.toYRot(), 0);
-		p.set(sx + 1, y - 1, cz - 2, St.of(Blocks.POTTED_FERN));
-		p.set(sx + 1, y - 1, cz + 2, St.of(Blocks.POTTED_FLOWERING_AZALEA));
+		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 3), sx - 1 + 0.5, y, cz - 2 + 0.5, Direction.SOUTH.toYRot(), 0);
+		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 4), sx + 1 + 0.5, y, cz + 2 + 0.5, Direction.NORTH.toYRot(), 0);
+		p.set(sx + 2, y, cz - 2, St.of(Blocks.POTTED_FERN));
+		p.set(sx + 2, y, cz + 2, St.of(Blocks.POTTED_FLOWERING_AZALEA));
 		// the way in, and where someone waiting is told to stand
 		for (int h = 0; h <= 1; h++) {
-			p.set(cx, y - 1 + h, cz + r, Blocks.AIR.defaultBlockState());
+			p.set(cx, y + h, cz + r, Blocks.AIR.defaultBlockState());
 		}
-		a.put(AnchorNames.ENTRANCE, cx + 0.5, y - 1, cz + r - 1.5, 180, 0);
+		a.put(AnchorNames.ENTRANCE, cx + 0.5, y, cz + r - 1.5, 180, 0);
 	}
 
 	/**
@@ -132,11 +132,12 @@ final class Amenities {
 			// A stair seats you looking the way it is NOT facing, so a lounger north of the water
 			// faces north and the sitter looks south, over the pool. Both of these were the wrong
 			// way round and the team sat with their backs to it.
+			// a seat you cannot step into is furniture: skip it unless a side is clear floor
+			if (standing(p, x - 1, z, bestY) != y && standing(p, x + 1, z, bestY) != y) {
+				continue;
+			}
 			p.set(x, y, z, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
 			a.put(AnchorNames.slot(AnchorNames.LOUNGE, n++), x + 0.5, y, z + 0.5, 0, 0);
-			if (x + 1 <= x1 && standing(p, x + 1, z, bestY) == y) {
-				p.set(x + 1, y, z, St.lantern(Blocks.LANTERN, false));
-			}
 			placed++;
 		}
 		if (placed == 0) {

@@ -66,6 +66,18 @@ public final class SchematicHqBuilder implements HqBuilder {
 	}
 
 	@Override
+	public int @Nullable [] site() {
+		try {
+			Litematic lit = cached != null ? cached : (cached = Litematic.read(file));
+			int y0 = GROUND - (lit.grassLine() >= 0 ? lit.grassLine() : lit.lowestSolid());
+			return new int[] {SITE_X - MARGIN, Math.min(y0, GROUND - 4), SITE_Z - MARGIN, SITE_X + lit.sizeX - 1 + MARGIN,
+				Math.max(y0 + lit.sizeY - 1, GROUND + 12) + Penthouse.HEIGHT + 3, SITE_Z + lit.sizeZ - 1 + MARGIN};
+		} catch (IOException | RuntimeException e) {
+			return null;
+		}
+	}
+
+	@Override
 	public void build(ServerLevel level, Anchors.Builder anchors) {
 		build(level, anchors, Options.DEFAULT);
 	}
@@ -108,14 +120,17 @@ public final class SchematicHqBuilder implements HqBuilder {
 		java.util.Set<String> fitted = new java.util.LinkedHashSet<>();
 		Penthouse.Room room = null;
 		String stairFault = null;
+		int bottomY = GROUND;
 		if (b != null) {
 			room = Penthouse.build(p, y0 + b[4], SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3]);
 			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()));
+			Penthouse.beacon(p, room, room.y() + Penthouse.HEIGHT);
 			int tx = SITE_X + b[2] + 2;
 			int tz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
 			// the pool first: the stair has to know how far down it is going
 			int poolDeck = Amenities.poolside(p, a, SITE_X, SITE_Z, SITE_X + lit.sizeX - 1, SITE_Z + lit.sizeZ - 1, GROUND - 1);
 			int bottom = poolDeck > 0 ? poolDeck : GROUND + 1;
+			bottomY = bottom;
 			Penthouse.spiral(p, tx, tz, bottom, room.y());
 			stairFault = Penthouse.check(p, tx, tz, bottom, room.y());
 			if (poolDeck > 0) {
@@ -141,7 +156,14 @@ public final class SchematicHqBuilder implements HqBuilder {
 		PlanStore.save(level.getServer(), id, site, p.cells());
 
 		anchors(a, floor, placed, fitted);
-		a.bounds(SITE_X, floor.y - 1, SITE_Z, SITE_X + lit.sizeX - 1, floor.y + 16, SITE_Z + lit.sizeZ - 1);
+		// the whole building, not just the schematic's own footprint: the penthouse oversails it,
+		// the stair tower stands beside it and the pool is far below, and agents walk all three
+		if (room != null) {
+			a.bounds(Math.min(room.x0(), SITE_X) - 6, Math.min(bottomY, GROUND) - 2, Math.min(room.z0(), SITE_Z) - 6,
+				Math.max(room.x1(), SITE_X + lit.sizeX - 1) + 6, room.y() + Penthouse.HEIGHT + 2, Math.max(room.z1(), SITE_Z + lit.sizeZ - 1) + 6);
+		} else {
+			a.bounds(SITE_X, floor.y - 1, SITE_Z, SITE_X + lit.sizeX - 1, floor.y + 16, SITE_Z + lit.sizeZ - 1);
+		}
 
 		String swapped = lit.replaced.isEmpty() ? ""
 			: ", " + String.join(" and ", lit.replaced) + " replaced with something that does not move you to another dimension";

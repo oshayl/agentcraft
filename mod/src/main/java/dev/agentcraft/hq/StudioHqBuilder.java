@@ -152,6 +152,11 @@ public final class StudioHqBuilder implements HqBuilder {
 	}
 
 	@Override
+	public int[] site() {
+		return SITE.clone();
+	}
+
+	@Override
 	public void build(ServerLevel level, Anchors.Builder a) {
 		build(level, a, Options.DEFAULT);
 	}

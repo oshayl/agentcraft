@@ -43,6 +43,8 @@ final class Penthouse {
 	private static final BlockState WALNUT = ModBlocks.WALNUT_PANEL.defaultBlockState();
 	private static final BlockState TRIM = ModBlocks.WALNUT_TRIM.defaultBlockState();
 	private static final BlockState LANTERN = St.lantern(Blocks.LANTERN, false);
+	/** waxed and unaffected, so the plinth does not go green round the goal */
+	private static final net.minecraft.world.level.block.Block COPPER = Blocks.CUT_COPPER_SLAB.waxed().unaffected();
 
 	/** The room the team works in: floor level and the walkable rectangle inside the glass. */
 	record Room(int y, int x0, int z0, int x1, int z1) {
@@ -285,7 +287,7 @@ final class Penthouse {
 		table(p, a, r);
 		lounge(p, a, r);
 
-		a.put(AnchorNames.GOAL_ATRIUM, (r.x0() + r.x1()) / 2.0 + 0.5, y, (r.z0() + r.z1()) / 2.0 + 0.5, 180, 0);
+		atrium(p, a, r);
 		a.put(AnchorNames.SPAWN, r.x1() - 1.5, y, r.z0() + 1.5, 0, 0);
 		a.put(AnchorNames.ENTRANCE, r.x1() - 1.5, y, r.z0() + 2.5, 0, 0);
 		a.put(AnchorNames.CAM_PREFIX + "overview", (r.x0() + r.x1()) / 2.0, y + 4, r.z1() + 14.0, 0, 22);
@@ -440,6 +442,51 @@ final class Penthouse {
 		// the head of the table: the lead sits at the east end and looks west, down the table
 		seat(p, a, "seat_lead", cx + half + 1, y, cz, Direction.WEST, Blocks.DARK_OAK_STAIRS);
 		a.put(AnchorNames.MEETING, cx + half + 1.5, y, cz + 0.5, Direction.WEST.toYRot(), 0);
+	}
+
+	/**
+	 * The goal atrium: a lamp on a copper plinth whose renderer draws the hologram above it - the
+	 * goal, its progress ring, the task and agent counts. Without this the floor has every
+	 * station and no way to see what the team is actually on.
+	 *
+	 * <p>The lamps beside it are the other two the Foreman drives: anything waiting on the user,
+	 * and a merge waiting to be answered.
+	 */
+	private static void atrium(Plan p, Anchors.Builder a, Room r) {
+		int y = r.y();
+		int cx = (r.x0() + r.x1()) / 2;
+		int cz = r.z0() + 3; // the desk end, clear of the podium and the spot the user stands on
+		p.set(cx, y, cz, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.IDLE));
+		p.bind(cx, y, cz, "goal:atrium");
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				if (dx != 0 || dz != 0) {
+					p.set(cx + dx, y, cz + dz, St.slab(COPPER, false));
+				}
+			}
+		}
+		a.put(AnchorNames.GOAL_ATRIUM, cx + 0.5, y, cz + 2.5, 0, 0);
+		// the two lamps that mean "you are needed", set into the wall over the task board
+		int zb = r.z1();
+		p.set(cx - 2, y + 5, zb, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.OFF));
+		p.bind(cx - 2, y + 5, zb, "decisions");
+		p.set(cx + 2, y + 5, zb, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.OFF));
+		p.bind(cx + 2, y + 5, zb, "merge");
+	}
+
+	/** The beacon on the roof: the whole place at a glance, from outside and at night. */
+	static void beacon(Plan p, Room r, int roofY) {
+		int cx = (r.x0() + r.x1()) / 2;
+		int cz = (r.z0() + r.z1()) / 2;
+		p.set(cx, roofY, cz, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.IDLE));
+		p.bind(cx, roofY, cz, "beacon");
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				if (dx != 0 || dz != 0) {
+					p.set(cx + dx, roofY, cz + dz, St.slab(COPPER, false));
+				}
+			}
+		}
 	}
 
 	/** Armchairs round a low table in the corner, for the agents with nothing on. */
