@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CLOSED, describeCapabilities, resolveCapabilities } from '../src/capabilities.js';
+import { CODEX_WEB_SEARCH, codexWebSearch } from '../src/agents/codex/engine.js';
 import { gitSafetyEnv, withGitSafety } from '../src/gitsafety.js';
 import { classifyToolUse, type PolicyContext } from '../src/policy.js';
 import { git, gitOut } from '../src/util/git.js';
@@ -159,5 +160,22 @@ describe('policy: git push by capability', () => {
 
   it('leaves the other remote-writing subcommands refused', () => {
     expect(verdict('git send-pack origin HEAD', pushing)).toBe('deny');
+  });
+});
+
+describe('what the Codex thread config says', () => {
+  // A wrong value here does not just lose a feature: `thread/start` fails to load the whole
+  // configuration, so the agent cannot run. That happened in real use with web_search:'enabled'.
+  it('only ever asks for a web_search variant Codex accepts', () => {
+    expect(CODEX_WEB_SEARCH).toEqual(['disabled', 'cached', 'indexed', 'live']);
+    expect(CODEX_WEB_SEARCH).toContain(codexWebSearch(true));
+    expect(CODEX_WEB_SEARCH).toContain(codexWebSearch(false));
+    expect(CODEX_WEB_SEARCH).toContain(codexWebSearch(undefined));
+  });
+
+  it('turns search on for the web capability and off without it', () => {
+    expect(codexWebSearch(true)).toBe('live');
+    expect(codexWebSearch(false)).toBe('disabled');
+    expect(codexWebSearch(undefined)).toBe('disabled');
   });
 });

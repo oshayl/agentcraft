@@ -48,6 +48,19 @@ const OFF_FEATURES = [
 
 const CLIENT_INFO = { name: 'agentcraft', title: 'AgentCraft', version: '0.1.0' };
 
+/**
+ * Codex's `web_search` variants. Anything else fails `thread/start` outright with
+ * "unknown variant ... in web_search", so the agent cannot run at all rather than merely
+ * losing search. Typed as a union so a wrong spelling cannot typecheck.
+ */
+export const CODEX_WEB_SEARCH = ['disabled', 'cached', 'indexed', 'live'] as const;
+export type CodexWebSearch = (typeof CODEX_WEB_SEARCH)[number];
+
+/** Live search when the agent has the web capability, off otherwise. */
+export function codexWebSearch(web: boolean | undefined): CodexWebSearch {
+  return web ? 'live' : 'disabled';
+}
+
 function notes(role: Role, tools: AgentTool[]): string {
   return [
     '',
@@ -153,8 +166,10 @@ export class CodexEngine implements Engine {
     // it every one of them is switched off, which is AgentCraft's default.
     return {
       ...(caps?.mcp ? {} : { mcp_servers: off(Object.keys(userConfig?.mcp_servers ?? {})), plugins: off(Object.keys(userConfig?.plugins ?? {})) }),
-      features: Object.fromEntries(OFF_FEATURES.map((f) => [f, false])),
-      web_search: caps?.web ? 'enabled' : 'disabled',
+      // `plugins` is in OFF_FEATURES, so the mcp capability has to keep it out of this list or
+      // the user's plugins stay off however their config.toml is written.
+      features: Object.fromEntries(OFF_FEATURES.filter((f) => !(caps?.mcp && f === 'plugins')).map((f) => [f, false])),
+      web_search: codexWebSearch(caps?.web),
       notify: [],
       include_apps_instructions: false,
       // Preserve both the git-safety variables Codex normally filters and any values isolated
