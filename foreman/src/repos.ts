@@ -244,6 +244,117 @@ export class RepoManager {
     this.ctx.emit({ type: 'repo.upsert', repo: { ...r, worktrees: r.worktrees.map((w) => ({ ...w })) } });
   }
 
+  // ---- in-game fixes (repo.fix) -------------------------------------------------------------
+  //
+  // Three recurring stalls, fixable from the console instead of a second terminal:
+  //   park/unpark  a merge is refused while the base checkout has modified tracked files
+  //   deps         a fresh worktree has no node_modules and the agent sandbox has no network,
+  //                so the agent's `npm ci` dies on DNS and the task goes to blocked
+
+  private static readonly PARK_SUBJECT = 'WIP checkpoint (parked from AgentCraft)';
+
+  /** The checkout holding this repo's base branch: the one a merge actually refuses on. */
+  private async baseCheckout(r: Repo): Promise<string> {
+    return (await this.checkoutOf(r, r.branch)) ?? r.path;
+  }
+
+  /** What currently blocks work in this repo, in the order the user would hit it. */
+  async fixReport(repoId: string): Promise<string[]> {
+    const r = this.require(repoId);
+    const out: string[] = [];
+    const checkout = await this.baseCheckout(r);
+
+    const modified = (await git(checkout, ['status', '--porcelain', '--untracked-files=no'], { allowFail: true })).stdout
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    const untracked = (await git(checkout, ['ls-files', '--others', '--exclude-standard'], { allowFail: true })).stdout
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    if (modified.length) {
+      out.push(`${modified.length} modified file(s) on ${r.branch} block merges - /fix park`);
+    } else {
+      out.push(`merges can land (${untracked.length} untracked file(s), which never block)`);
+    }
+
+    const stale = await this.worktreesMissingDeps(r);
+    if (stale.length) out.push(`${stale.length} worktree(s) missing node_modules - /fix deps: ${stale.map((w) => w.id).join(', ')}`);
+    return out;
+  }
+
+  /** Worktrees whose node_modules is absent or thinner than the base checkout's. */
+  private async worktreesMissingDeps(r: Repo): Promise<Worktree[]> {
+    const src = path.join(await this.baseCheckout(r), 'node_modules');
+    if (!fs.existsSync(src)) return [];
+    const want = this.binCount(src);
+    if (!want) return [];
+    return r.worktrees.filter((w) => w.status === 'active' && this.binCount(path.join(w.path, 'node_modules')) !== want);
+  }
+
+  private binCount(nodeModules: string): number {
+    try {
+      return fs.readdirSync(path.join(nodeModules, '.bin')).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Checkpoint-commit the base checkout's modified tracked files so a merge can land.
+   * Untracked files are deliberately left alone: `isDirty` ignores them, so they never block,
+   * and committing a user's unfinished new files without asking would be a surprise.
+   */
+  async park(repoId: string): Promise<string> {
+    const r = this.require(repoId);
+    const checkout = await this.baseCheckout(r);
+    if (!(await this.isDirty(checkout))) return 'nothing to park: no modified tracked files';
+    const staged = await git(checkout, ['add', '-u'], { allowFail: true });
+    if (staged.code !== 0) throw new RepoError(`could not stage: ${staged.stderr.trim()}`, 'failed');
+    const msg = `${RepoManager.PARK_SUBJECT}\n\nParked so an agent merge can land. Undo with /fix unpark.`;
+    const c = await git(checkout, ['commit', '-m', msg], { allowFail: true });
+    if (c.code !== 0) throw new RepoError(`could not commit: ${c.stderr.trim() || c.stdout.trim()}`, 'failed');
+    const sha = (await git(checkout, ['rev-parse', '--short', 'HEAD'], { allowFail: true })).stdout.trim();
+    await this.refresh(r.id);
+    return `parked as ${sha}; merges can land now`;
+  }
+
+  /** Undo a park, but only while it is still the tip: never rewrite a merge off the branch. */
+  async unpark(repoId: string): Promise<string> {
+    const r = this.require(repoId);
+    const checkout = await this.baseCheckout(r);
+    const subject = (await git(checkout, ['log', '-1', '--format=%s'], { allowFail: true })).stdout.trim();
+    if (subject !== RepoManager.PARK_SUBJECT) {
+      throw new RepoError(`HEAD is not a checkpoint ("${subject}"); refusing to rewrite it`, 'refused');
+    }
+    const res = await git(checkout, ['reset', '--soft', 'HEAD~1'], { allowFail: true });
+    if (res.code !== 0) throw new RepoError(`could not unpark: ${res.stderr.trim()}`, 'failed');
+    await this.refresh(r.id);
+    return 'unparked; your changes are staged again';
+  }
+
+  /**
+   * Give worktrees the base checkout's node_modules. On APFS `cp -c` clones, so this is close to
+   * instant and costs no extra disk; elsewhere it is a plain recursive copy.
+   */
+  async linkDeps(repoId: string): Promise<string> {
+    const r = this.require(repoId);
+    const src = path.join(await this.baseCheckout(r), 'node_modules');
+    if (!fs.existsSync(src)) return 'nothing to do: the checkout has no node_modules';
+    const stale = await this.worktreesMissingDeps(r);
+    if (!stale.length) return 'all worktrees already have their dependencies';
+    const done: string[] = [];
+    for (const w of stale) {
+      const dest = path.join(w.path, 'node_modules');
+      fs.rmSync(dest, { recursive: true, force: true });
+      const cp = await runShell(`cp -c -R ${JSON.stringify(src)} ${JSON.stringify(dest)} 2>/dev/null || cp -R ${JSON.stringify(src)} ${JSON.stringify(dest)}`, {
+        cwd: w.path,
+      });
+      if (cp.code === 0) done.push(w.id);
+    }
+    return done.length ? `dependencies restored in: ${done.join(', ')}` : 'could not copy dependencies';
+  }
+
   setCi(repoId: string, ci: CiStatus): void {
     const r = this.require(repoId);
     if (r.ci === ci) return;

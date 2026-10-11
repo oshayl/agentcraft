@@ -398,6 +398,15 @@ export const DiffRequestMsg = z.object({
   worktree: Id.describe('worktree id (e.g. "kit-t2"); an agent id resolves to that agent\'s current worktree'),
 });
 export const RepoAddMsg = z.object({ ...envelope('repo.add'), path: z.string().min(1) });
+export const RepoFixMsg = z.object({
+  ...envelope('repo.fix'),
+  action: z
+    .enum(['report', 'park', 'unpark', 'deps'])
+    .describe(
+      'report: what currently blocks work in each repo. park: checkpoint-commit the base checkout\'s modified tracked files so a merge can land (untracked files are left alone; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout\'s node_modules into worktrees missing it, for sandboxes with no network',
+    ),
+  repoId: Id.optional().describe('the repo to act on; omitted = every registered repo'),
+});
 
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMsg,
@@ -408,6 +417,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   AgentActionMsg,
   DiffRequestMsg,
   RepoAddMsg,
+  RepoFixMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -481,6 +491,10 @@ export const CLIENT_MESSAGES = {
   'agent.action': { schema: AgentActionMsg, doc: 'Pause/resume/stop an agent, or spawn (activate) an off-shift worker.' },
   'diff.request': { schema: DiffRequestMsg, doc: 'Ask for the structured diff of a worktree. Answered with `diff` (same requestId).' },
   'repo.add': { schema: RepoAddMsg, doc: 'Register a local git repo (console: `/repo add <path>`).' },
+  'repo.fix': {
+    schema: RepoFixMsg,
+    doc: 'Clear what is blocking work, from the console (`/fix [park|unpark|deps] [repo]`), without leaving the game. Answered with `{lines}`, one per repo acted on, which are also written to the feed.',
+  },
 } as const;
 
 export const ENTITY_SCHEMAS = {

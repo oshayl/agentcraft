@@ -538,6 +538,31 @@ export class Foreman {
         this.bus.feed('system', `Repo connected: ${r.name} (${r.branch})`);
         return { repoId: r.id };
       }
+      case 'repo.fix': {
+        const targets = msg.repoId ? [this.repos.require(msg.repoId)] : this.repos.list();
+        if (!targets.length) throw new Error('no repos registered');
+        const lines: string[] = [];
+        for (const r of targets) {
+          const label = targets.length > 1 ? `${r.name}: ` : '';
+          try {
+            if (msg.action === 'report') {
+              for (const l of await this.repos.fixReport(r.id)) lines.push(`${label}${l}`);
+            } else {
+              const verb =
+                msg.action === 'park'
+                  ? await this.repos.park(r.id)
+                  : msg.action === 'unpark'
+                    ? await this.repos.unpark(r.id)
+                    : await this.repos.linkDeps(r.id);
+              lines.push(`${label}${verb}`);
+            }
+          } catch (e) {
+            lines.push(`${label}${(e as Error).message}`);
+          }
+        }
+        for (const l of lines) this.bus.feed('system', l);
+        return { lines };
+      }
     }
   }
 

@@ -12,6 +12,7 @@ import dev.agentcraft.client.console.ConsoleCommands.Intent;
 import dev.agentcraft.client.console.ConsoleCommands.Invalid;
 import dev.agentcraft.client.console.ConsoleCommands.Message;
 import dev.agentcraft.client.console.ConsoleCommands.RepoAdd;
+import dev.agentcraft.client.console.ConsoleCommands.RepoFix;
 import dev.agentcraft.client.console.ConsoleCommands.Repos;
 import dev.agentcraft.client.console.ConsoleCommands.ShowDiff;
 import dev.agentcraft.client.console.ConsoleCommands.Sound;
@@ -199,6 +200,21 @@ public final class ConsoleActions {
 				String rid = ack.result() != null && ack.result().has("repoId") ? ack.result().get("repoId").getAsString() : null;
 				return "repo " + (rid != null ? rid + " " : "") + "added " + UiBits.CHECK;
 			}, "adding the repo\u2026");
+			case RepoFix f -> track(Foreman.fixRepo(f.action(), f.repoId()), raw, restore, ack -> {
+				// the Foreman also feeds each line; this is the inline acknowledgement
+				if (ack.result() != null && ack.result().has("lines")) {
+					com.google.gson.JsonArray ls = ack.result().getAsJsonArray("lines");
+					StringBuilder b = new StringBuilder();
+					for (int i = 0; i < ls.size(); i++) {
+						if (i > 0) {
+							b.append(" \u00b7 ");
+						}
+						b.append(ls.get(i).getAsString());
+					}
+					return b.length() > 0 ? b.toString() : "nothing to fix " + UiBits.CHECK;
+				}
+				return "done " + UiBits.CHECK;
+			}, f.action().equals("report") ? "checking\u2026" : f.action() + "\u2026");
 			case AgentAction a -> {
 				List<CompletableFuture<Ack>> all = new ArrayList<>();
 				for (String id : a.agentIds()) {

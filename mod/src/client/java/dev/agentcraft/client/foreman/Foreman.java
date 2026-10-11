@@ -83,6 +83,11 @@ public final class Foreman {
 		return link.send(ForemanJson.msg("repo.add").put("path", path).json());
 	}
 
+	/** {@code action}: report | park | unpark | deps. {@code repoId} null = every registered repo. */
+	public static CompletableFuture<Ack> fixRepo(String action, @Nullable String repoId) {
+		return link.send(ForemanJson.msg("repo.fix").put("action", action).put("repoId", repoId).json());
+	}
+
 	/** Structured diff of a worktree (or an agent id: its current worktree) vs its base. */
 	public static CompletableFuture<Diff> requestDiff(String repoId, String worktree) {
 		return link.requestDiff(repoId, worktree);

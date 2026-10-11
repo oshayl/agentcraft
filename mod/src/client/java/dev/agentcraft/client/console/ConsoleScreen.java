@@ -578,7 +578,7 @@ public class ConsoleScreen extends Screen {
 	/** Intents that go to the Foreman (everything but the local commands). */
 	private static boolean sendsToForeman(Intent in) {
 		return in instanceof Goal || in instanceof ConsoleCommands.Message || in instanceof ConsoleCommands.Answer || in instanceof ConsoleCommands.RepoAdd
-			|| in instanceof ConsoleCommands.AgentAction || in instanceof ConsoleCommands.TaskAction;
+			|| in instanceof ConsoleCommands.RepoFix || in instanceof ConsoleCommands.AgentAction || in instanceof ConsoleCommands.TaskAction;
 	}
 
 	@Override

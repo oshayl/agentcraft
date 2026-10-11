@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -56,6 +56,10 @@ public final class ConsoleCommands {
 	}
 
 	public record RepoAdd(String path) implements Intent {
+	}
+
+	/** {@code action}: report | park | unpark | deps. {@code repoId} null = every registered repo. */
+	public record RepoFix(String action, @Nullable String repoId) implements Intent {
 	}
 
 	public record Repos() implements Intent {
@@ -106,6 +110,7 @@ public final class ConsoleCommands {
 		new Command("task", "/task <id> cancel|retry|prioritize|reassign", "steer a task"),
 		new Command("repo", "/repo add <path>", "register a local git repo"),
 		new Command("repos", "/repos", "list repos"),
+		new Command("fix", "/fix [park|unpark|deps] [repo]", "clear what is blocking work"),
 		new Command("status", "/status", "goal, agents, tasks and decisions"),
 		new Command("sound", "/sound on|off", "decision bell and done chime"),
 		new Command("clear", "/clear", "clear the console's own lines"),
@@ -178,6 +183,7 @@ public final class ConsoleCommands {
 			case "answer", "a" -> parseAnswer(rest, s);
 			case "repo" -> parseRepo(rest, args);
 			case "repos" -> new Repos();
+			case "fix" -> parseFix(args, s);
 			case "pause", "resume", "stop", "spawn" -> parseAgentAction(cmd, args, s);
 			case "task", "t" -> parseTask(args, s);
 			case "diff" -> parseDiff(args, s);
@@ -224,6 +230,31 @@ public final class ConsoleCommands {
 			return new Invalid("usage: /repo add <path to a local git repo>");
 		}
 		return new RepoAdd(path);
+	}
+
+	private static final List<String> FIX_ACTIONS = List.of("report", "park", "unpark", "deps");
+	private static final java.util.Map<String, String> FIX_HINTS = java.util.Map.of(
+		"report", "what is blocking work right now",
+		"park", "checkpoint your uncommitted changes so a merge can land",
+		"unpark", "undo the last checkpoint",
+		"deps", "give worktrees the dependencies they are missing");
+
+	/** {@code /fix}, {@code /fix park}, {@code /fix deps betterfiles}. Bare /fix reports. */
+	private static Intent parseFix(List<String> args, ForemanState s) {
+		String action = args.isEmpty() ? "report" : args.get(0).toLowerCase(Locale.ROOT);
+		if (!FIX_ACTIONS.contains(action)) {
+			return new Invalid("usage: /fix [park|unpark|deps] [repo] (bare /fix reports what is blocking)");
+		}
+		if (args.size() < 2) {
+			return new RepoFix(action, null);
+		}
+		String want = args.get(1).toLowerCase(Locale.ROOT);
+		for (Repo r : s.repos().values()) {
+			if (r.id().equalsIgnoreCase(want) || r.name().equalsIgnoreCase(want)) {
+				return new RepoFix(action, r.id());
+			}
+		}
+		return new Invalid("no repo named " + args.get(1) + " (" + String.join(", ", s.repos().keySet()) + ")");
 	}
 
 	private static Intent parseAgentAction(String action, List<String> args, ForemanState s) {
@@ -482,6 +513,7 @@ public final class ConsoleCommands {
 			case Message m -> m.to().equals("all") ? "message everyone" : "message " + displayName(m.to(), s);
 			case Answer a -> "answer " + a.decision().id() + (a.option() != null ? ": " + a.option() : ": free text");
 			case RepoAdd r -> "add repo";
+			case RepoFix f -> "fix: " + f.action() + (f.repoId() != null ? " " + f.repoId() : "");
 			case Repos r -> "list repos";
 			case AgentAction a -> a.action() + " " + (a.agentIds().size() == 1 ? displayName(a.agentIds().get(0), s) : a.agentIds().size() + " agents");
 			case TaskAction t -> t.action() + " " + t.taskId();
@@ -603,6 +635,21 @@ public final class ConsoleCommands {
 			case "/repo" -> {
 				if (argIndex == 1 && "add".startsWith(lower)) {
 					out.add(new Completion(ts, cursor, "add ", "add", "register a local git repo", null, null));
+				}
+			}
+			case "/fix" -> {
+				if (argIndex == 1) {
+					for (String a : FIX_ACTIONS) {
+						if (a.startsWith(lower)) {
+							out.add(new Completion(ts, cursor, a + " ", a, FIX_HINTS.get(a), null, null));
+						}
+					}
+				} else if (argIndex == 2) {
+					for (Repo r : s.repos().values()) {
+						if (r.id().toLowerCase(Locale.ROOT).startsWith(lower)) {
+							out.add(new Completion(ts, cursor, r.id(), r.id(), r.name(), null, null));
+						}
+					}
 				}
 			}
 			case "/sound" -> {
@@ -778,6 +825,10 @@ public final class ConsoleCommands {
 				m.put("text", a.text());
 			}
 			case RepoAdd r -> m.put("path", r.path());
+			case RepoFix f -> {
+				m.put("action", f.action());
+				m.put("repoId", f.repoId());
+			}
 			case AgentAction a -> {
 				m.put("agents", a.agentIds());
 				m.put("action", a.action());

@@ -1028,6 +1028,26 @@ Register a local git repo (console: `/repo add <path>`).
 }
 ```
 
+### `repo.fix`
+
+Clear what is blocking work, from the console (`/fix [park|unpark|deps] [repo]`), without leaving the game. Answered with `{lines}`, one per repo acted on, which are also written to the feed.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `action` | `report` \| `park` \| `unpark` \| `deps` | yes | report: what currently blocks work in each repo. park: checkpoint-commit the base checkout's modified tracked files so a merge can land (untracked files are left alone; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout's node_modules into worktrees missing it, for sandboxes with no network |
+| `repoId` | string | no | the repo to act on; omitted = every registered repo |
+
+```json
+{
+  "v": 1,
+  "type": "repo.fix",
+  "id": "c19",
+  "action": "park",
+  "repoId": "demo-app"
+}
+```
+
 ## Console mapping (mod)
 
 | console input | message |
