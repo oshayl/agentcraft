@@ -931,10 +931,15 @@ public final class StudioHqBuilder implements HqBuilder {
 		}
 		p.set(-22, FEET + 3, HZN + 1, St.of(Blocks.POTTED_FERN));
 		p.set(-19, FEET + 3, HZN + 1, LANTERN);
-		// freestanding double shelf (memory archive both sides) and a catalog
+		// Freestanding double shelf: the three libraries that are not one agent's notes, each bay
+		// bound to its own scope, so the shelf label reads "Shared 10", "Artifacts 2", "Vault 893"
+		// and clicking a bay opens that tab. Without this the artifacts and the user's own folders
+		// were only reachable from the console, which is not a thing you can find by walking in.
+		String[] bays = {"artifacts", "shared", "vault"};
 		for (int z = -1; z <= 1; z++) {
+			String bay = bays[z + 1];
 			p.set(-18, FEET, z, ModBlocks.MEMORY_ARCHIVE.defaultBlockState().setValue(FacingEntityBlock.FACING, W));
-			p.bind(-18, FEET, z, "shared");
+			p.bind(-18, FEET, z, bay);
 			p.set(-18, FEET + 1, z, z == 0 ? LANTERN : St.candle(Blocks.CANDLE, 2, true));
 		}
 		p.set(-18, FEET, -2, ModBlocks.MEMORY_CATALOG.defaultBlockState().setValue(HorizontalDirectionalBlock.FACING, W));
