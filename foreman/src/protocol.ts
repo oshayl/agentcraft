@@ -419,6 +419,18 @@ export const PermissionModeSetMsg = z.object({
   ...envelope('permissions.set'),
   mode: PermissionMode.optional().describe('omitted = cycle to the next mode'),
 });
+export const CapsSetMsg = z.object({
+  ...envelope('caps.set'),
+  repoId: Id.optional().describe('the repo whose agents this changes; omitted = report every repo and change nothing'),
+  role: z.enum(['lead', 'worker']).optional().describe('omitted = both the lead and the workers'),
+  caps: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'comma-separated capability names (network, push, mcp, web, write, force, full), "all", "none", or "default" to drop the override and go back to config.json. Names are added to what config.json already grants that role, so "none" is how everything closes again. Omitted = report what this repo has now. "full" means no sandbox: the agent reaches the whole machine like the user own terminal.',
+    ),
+});
 
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMsg,
@@ -431,6 +443,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   RepoAddMsg,
   RepoFixMsg,
   PermissionModeSetMsg,
+  CapsSetMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -507,6 +520,10 @@ export const CLIENT_MESSAGES = {
   'permissions.set': {
     schema: PermissionModeSetMsg,
     doc: 'Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-game key). Never affects hard denials or merges.',
+  },
+  'caps.set': {
+    schema: CapsSetMsg,
+    doc: 'Change how far one repository\'s agents may reach, from the console (`/caps [repo] [lead|worker] <list>`), without editing config.json or restarting. Answered with `{lines}`, which are also written to the feed. The override is per repo, persists across restarts, and wins over the roles in config.json; an agent whose capabilities changed starts a fresh thread on its next turn.',
   },
   'repo.fix': {
     schema: RepoFixMsg,

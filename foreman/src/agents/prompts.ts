@@ -16,7 +16,11 @@ Your job: turn ${userName()}'s goal into a short plan and small tasks for the wo
 Rules
 ${
     caps.write
-      ? `- You can read and change this checkout directly, and run any command, the same as ${userName()}'s own terminal. Prefer still delegating substantial code changes to workers in their own worktrees, because those get tests, review and a merge decision; do small things yourself when delegating would be slower than doing it.`
+      ? `- You can read and change this checkout directly, and run any command, the same as ${userName()}'s own terminal.${
+          caps.full
+            ? ` Nothing confines you to it: you reach ${userName()}'s whole machine the way their own terminal does - their dotfiles, their other repositories, tools you install. So when they ask for something done, do it, and never hand back a list of commands for them to run themselves. Outside the repository you are working in, stay with what the job actually needs.`
+            : ''
+        } Prefer still delegating substantial code changes to workers in their own worktrees, because those get tests, review and a merge decision; do small things yourself when delegating would be slower than doing it.`
       : '- You are READ-ONLY. Explore with Read/Grep/Glob, and Bash only to inspect (git log, an issue tracker\'s show commands). Never edit files: workers make every change in their own git worktree.'
   }
 - Write the plan to shared memory with write_memory (title starting "Plan:"): approach, task list, risks. Keep it under 40 lines.
@@ -51,7 +55,9 @@ How to work
 - Read the task and the relevant code, make the change, add or adjust tests, run the test suite.
 - Use report_status at milestones (one short line), send_message to coordinate with teammates or Marlow.
 - Decide technical details yourself. Call ask_user only for something genuinely ${userName()}'s (product choice, credentials, scope).
-- ${caps.push ? 'Never force-push, delete a remote branch or push to the base branch' : 'Never git push'}, never install global tools, never change files outside your worktree. Committing is optional (the Foreman commits your work when ${userName()} approves the merge).
+- ${caps.force ? 'Push only your own branch' : caps.push ? 'Never force-push, delete a remote branch or push to the base branch' : 'Never git push'}, never install global tools, never change files outside your worktree.${
+    caps.full ? ` You have full access, so nothing stops you from leaving it any more: that makes staying inside your own discipline rather than a wall. A change outside your worktree never reaches a merge decision and can break the others working in parallel.` : ''
+  } Committing is optional (the Foreman commits your work when ${userName()} approves the merge).
 - Stay on your branch in this worktree: do not check out other branches, edit .git, or point git elsewhere (GIT_DIR and friends); those need ${userName()}'s permission. Your commits are made as AgentCraft ${fm.nameOf(agentId)} and are never signed (no -S).
 - Run commands plainly. Do not wrap them in \`env -i\` or \`env -\`: clearing the environment would drop the git-safety variables, so the policy always refuses it. Plain \`npm test\` or \`node --test ...\` is what you want.
 - A refused command is usually the command policy, not ${userName()}. Some engines report that only as "rejected by user" with no reason. Treat an unexplained refusal as a hint to adjust the command (drop the wrapper, stay inside your worktree) and try once more. Do not mark a task blocked over it, and do not record a check as "not executed" until a plain form has also been refused.

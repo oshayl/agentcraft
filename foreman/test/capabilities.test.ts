@@ -1,18 +1,24 @@
-// Per-agent capabilities: what opening the network and pushes really changes, and what stays
-// shut in every combination. The guarantees that must survive a fully opened agent are:
-//   - no force push, no branch delete, no --mirror/--all
-//   - no push to a repository's base branch (that is what merge decisions are for)
-//   - no signing with the user's key
+// Per-agent capabilities: what opening the network, pushes and the sandbox really changes, and
+// what each flag still leaves shut. The ones that must stay shut unless the matching capability
+// is granted:
+//   - no git transport at all without `network`, and no push without `push`
+//   - no force push, branch delete, --mirror/--all or push to a base branch without `force`
+//   - no sandbox escape without `full`
+//   - never signing with the user's key, whatever is granted
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CLOSED, describeCapabilities, resolveCapabilities } from '../src/capabilities.js';
-import { CODEX_WEB_SEARCH, codexWebSearch } from '../src/agents/codex/engine.js';
+import { CAPABILITY_NAMES, CLOSED, describeCapabilities, resolveCapabilities, withRepoCapabilities } from '../src/capabilities.js';
+import { CODEX_SANDBOX, CODEX_WEB_SEARCH, codexWebSearch, sandboxMode } from '../src/agents/codex/engine.js';
+import { capsFrom } from '../src/config.js';
 import { gitSafetyEnv, withGitSafety } from '../src/gitsafety.js';
 import { classifyToolUse, type PolicyContext } from '../src/policy.js';
 import { git, gitOut } from '../src/util/git.js';
 import { runShell } from '../src/util/proc.js';
-import { rmrf, tempDir } from './helpers.js';
+import { demoRepo, makeForeman, rmrf, tempDir } from './helpers.js';
+import { CodexEngine } from '../src/agents/codex/engine.js';
+import { TeamBackend } from '../src/agents/team.js';
+import type { ClientMessage, Outbound } from '../src/protocol.js';
 
 describe('resolveCapabilities', () => {
   it('is closed by default', () => {
@@ -209,8 +215,158 @@ describe('the write and force capabilities', () => {
     expect(resolveCapabilities({ lead: { force: true } }, 'lead')).toMatchObject({ force: true, push: true, network: true });
   });
 
-  it('"all" in config means every capability', () => {
-    const every = resolveCapabilities({ lead: { network: true, push: true, mcp: true, web: true, write: true, force: true } }, 'lead');
+  it('"all" in config means every capability, including ones added later', () => {
+    // Through the real parser, not a hand-written list: "all" has to keep meaning all.
+    const every = resolveCapabilities({ lead: capsFrom('all', 'lead') }, 'lead');
     expect(Object.values(every).every(Boolean)).toBe(true);
+    expect(Object.keys(every).sort()).toEqual([...CAPABILITY_NAMES].sort());
+  });
+});
+
+// Full access is the one capability with nothing underneath it: the Codex sandbox is what keeps
+// an agent inside the worktree at all, so these tests pin both the mode name (an unknown one
+// fails thread/start outright, the way `web_search: 'enabled'` once did) and the implications.
+describe('the full capability', () => {
+  it('is a sandbox mode Codex actually knows', () => {
+    expect(CODEX_SANDBOX).toContain('danger-full-access');
+  });
+
+  it('turns the sandbox off for both roles', () => {
+    const full = resolveCapabilities({ lead: { full: true }, worker: { full: true } }, 'lead');
+    expect(sandboxMode('lead', full)).toBe('danger-full-access');
+    expect(sandboxMode('worker', full)).toBe('danger-full-access');
+  });
+
+  it('leaves the sandbox on without it', () => {
+    expect(sandboxMode('lead', CLOSED)).toBe('read-only');
+    expect(sandboxMode('lead', { ...CLOSED, network: true })).toBe('workspace-write');
+    expect(sandboxMode('lead', { ...CLOSED, write: true, push: true, force: true })).toBe('workspace-write');
+    expect(sandboxMode('worker', CLOSED)).toBe('workspace-write');
+  });
+
+  it('implies write, force, push and network: a sandbox was all those were behind', () => {
+    expect(resolveCapabilities({ worker: { full: true } }, 'worker')).toEqual({ ...CLOSED, full: true, write: true, force: true, push: true, network: true });
+  });
+
+  it('lets the lead write and push, since the policy is the only check left', () => {
+    const ctx = (capabilities: ReturnType<typeof resolveCapabilities>): PolicyContext => ({ role: 'lead', cwd: process.cwd(), capabilities, protectedBranches: ['main'] });
+    const full = ctx(resolveCapabilities({ lead: { full: true } }, 'lead'));
+    expect(classifyToolUse('Edit', { file_path: path.join(process.cwd(), 'src/x.ts') }, full).action).toBe('allow');
+    expect(classifyToolUse('Bash', { command: 'git push origin main' }, full).action).not.toBe('deny');
+  });
+});
+
+describe('per-repository capabilities', () => {
+  const cfg = { lead: { mcp: true }, byAgent: { marlow: { web: true } }, byRepo: { trusted: { lead: { full: true } } } };
+
+  it('the repo wins over the role and the agent: it is the runtime toggle', () => {
+    expect(resolveCapabilities(cfg, 'lead', 'marlow', 'trusted').full).toBe(true);
+    expect(resolveCapabilities(cfg, 'lead', 'marlow', 'other').full).toBe(false);
+    expect(resolveCapabilities(cfg, 'lead', 'marlow', 'other').web).toBe(true);
+  });
+
+  it('only touches the role it was set for', () => {
+    expect(resolveCapabilities(cfg, 'worker', 'kit', 'trusted')).toEqual(CLOSED);
+  });
+
+  it('merges a runtime override over the config file, per role', () => {
+    const merged = withRepoCapabilities(cfg, { trusted: { worker: { mcp: true } }, extra: { lead: { network: true } } });
+    expect(resolveCapabilities(merged, 'lead', 'marlow', 'trusted').full).toBe(true);
+    expect(resolveCapabilities(merged, 'worker', 'kit', 'trusted').mcp).toBe(true);
+    expect(resolveCapabilities(merged, 'lead', 'marlow', 'extra').network).toBe(true);
+    expect(resolveCapabilities(merged, 'lead', 'marlow', 'extra').full).toBe(false);
+  });
+
+  it('keeps the repos from the config file when there is no runtime override', () => {
+    expect(withRepoCapabilities(cfg, {})).toBe(cfg);
+    expect(withRepoCapabilities(cfg, undefined).byRepo?.trusted?.lead?.full).toBe(true);
+  });
+
+  it('parses a repo entry as one list for both roles, or per role', () => {
+    expect(capsFrom('full', 'r')).toEqual({ full: true });
+    expect(capsFrom('none', 'r')).toEqual(CLOSED);
+    expect(() => capsFrom('sudo', 'r')).toThrow(/unknown r capability "sudo"/);
+    expect(CAPABILITY_NAMES).toContain('full');
+  });
+});
+
+// The runtime toggle the user actually reaches for: `/caps <repo> full` in the console, which is
+// this message. It has to persist, win over the config file, and only touch the repo it names.
+describe('caps.set', () => {
+  async function harness(capabilities: Parameters<typeof resolveCapabilities>[0]) {
+    const home = tempDir();
+    const repoPath = await demoRepo();
+    const h = makeForeman(home, ['--backend', 'sim']);
+    const engine = new CodexEngine(h.fm, h.cfg.codex);
+    const backend = new TeamBackend(h.fm, h.cfg.claude, { name: 'codex', engines: { lead: engine, worker: engine }, capabilities });
+    h.fm['backend'] = backend;
+    const repo = await h.fm.repos.add(repoPath);
+    const send = async (msg: Partial<Extract<ClientMessage, { type: 'caps.set' }>>): Promise<Extract<Outbound, { type: 'ack' }>> => {
+      const replies: Outbound[] = [];
+      await h.fm.handle({ v: 1, id: 'x', type: 'caps.set', ...msg } as ClientMessage, (m) => replies.push(m));
+      return replies.find((m) => m.type === 'ack') as Extract<Outbound, { type: 'ack' }>;
+    };
+    const lines = (a: Extract<Outbound, { type: 'ack' }>) => (a.result?.lines as string[]) ?? [];
+    return { h, backend, repo, send, lines, cleanup: async () => { await h.fm.close(); rmrf(home); rmrf(path.dirname(repoPath)); } };
+  }
+
+  it('reports what each repo has now, and changes nothing', async () => {
+    const t = await harness({ lead: { mcp: true }, worker: {} });
+    try {
+      const a = await t.send({});
+      expect(a.ok).toBe(true);
+      expect(t.lines(a)[0]).toMatch(/demo-app: lead mcp \| workers closed/);
+      expect(t.h.fm.repoCapabilities()).toEqual({});
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('grants full access to one lead, for one repo, and persists it', async () => {
+    const t = await harness({ lead: { mcp: true }, worker: {} });
+    try {
+      const a = await t.send({ repoId: t.repo.id, role: 'lead', caps: 'full' });
+      expect(a.ok).toBe(true);
+      // `mcp` stays: a repo override patches what the role already has, like a per-agent one
+      expect(t.lines(a)[0]).toMatch(/The lead in demo-app: lead network, push, mcp, write, force, full/);
+      expect(t.backend.capsFor('marlow', 'lead', t.repo.id).full).toBe(true);
+      // the workers were not named, so they are untouched
+      expect(t.backend.capsFor('kit', 'worker', t.repo.id)).toEqual(CLOSED);
+      // and another repo is untouched: the grant is per repo, which is the whole point
+      expect(t.backend.capsFor('marlow', 'lead', 'elsewhere').full).toBe(false);
+      expect(t.h.fm.store.data.repoCaps[t.repo.id]?.lead).toEqual({ full: true });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('wins over the config file, and "default" gives it back', async () => {
+    const t = await harness({ lead: capsFrom('all', 'lead'), worker: {} });
+    try {
+      expect(t.backend.capsFor('marlow', 'lead', t.repo.id).full).toBe(true);
+      await t.send({ repoId: t.repo.id, caps: 'none' });
+      expect(t.backend.capsFor('marlow', 'lead', t.repo.id)).toEqual(CLOSED);
+      const back = await t.send({ repoId: t.repo.id, caps: 'default' });
+      expect(t.lines(back)[0]).toMatch(/back to the config file/);
+      expect(t.backend.capsFor('marlow', 'lead', t.repo.id).full).toBe(true);
+      expect(t.h.fm.repoCapabilities()).toEqual({});
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('asks which repo rather than granting everywhere, and refuses a name it does not know', async () => {
+    const t = await harness({});
+    try {
+      const vague = await t.send({ caps: 'full' });
+      expect(t.backend.capsFor('marlow', 'lead', t.repo.id).full).toBe(false);
+      expect(t.lines(vague).at(-1)).toMatch(/Name the repo to change/);
+      const bad = await t.send({ repoId: t.repo.id, caps: 'sudo' });
+      expect(bad.ok).toBe(false);
+      // a typo is a user error, not an "internal error: ..."
+      expect(bad.error).toMatch(/^unknown repo demo-app capability "sudo"/);
+    } finally {
+      await t.cleanup();
+    }
   });
 });

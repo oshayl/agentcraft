@@ -12,6 +12,7 @@ import dev.agentcraft.client.console.ConsoleCommands.Intent;
 import dev.agentcraft.client.console.ConsoleCommands.Invalid;
 import dev.agentcraft.client.console.ConsoleCommands.Message;
 import dev.agentcraft.client.console.ConsoleCommands.RepoAdd;
+import dev.agentcraft.client.console.ConsoleCommands.Caps;
 import dev.agentcraft.client.console.ConsoleCommands.Permissions;
 import dev.agentcraft.client.console.ConsoleCommands.RepoFix;
 import dev.agentcraft.client.console.ConsoleCommands.Repos;
@@ -207,6 +208,23 @@ public final class ConsoleActions {
 					? "permissions: auto \u00b7 prompts are allowed automatically; merges still need you"
 					: "permissions: ask \u00b7 every prompt comes to you " + UiBits.CHECK;
 			}, "switching\u2026");
+			case Caps c -> track(Foreman.setCaps(c.repoId(), c.role(), c.caps()), raw, restore, ack -> {
+				// the Foreman feeds the same lines; this is the inline acknowledgement
+				if (ack.result() != null && ack.result().has("lines")) {
+					com.google.gson.JsonArray ls = ack.result().getAsJsonArray("lines");
+					StringBuilder b = new StringBuilder();
+					for (int i = 0; i < ls.size(); i++) {
+						if (i > 0) {
+							b.append(" \u00b7 ");
+						}
+						b.append(ls.get(i).getAsString());
+					}
+					if (b.length() > 0) {
+						return b.toString();
+					}
+				}
+				return "done " + UiBits.CHECK;
+			}, c.caps() == null ? "checking\u2026" : "granting\u2026");
 			case RepoFix f -> track(Foreman.fixRepo(f.action(), f.repoId()), raw, restore, ack -> {
 				// the Foreman also feeds each line; this is the inline acknowledgement
 				if (ack.result() != null && ack.result().has("lines")) {

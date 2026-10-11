@@ -8,6 +8,8 @@
 //   No network inside the sandbox unless the agent has the network capability (capabilities.ts),
 //   and because Codex only honours network_access in the workspace-write sandbox, a lead with
 //   that capability runs workspace-write too; the policy still refuses its writes.
+//   With the `full` capability there is no sandbox at all (danger-full-access): the agent reaches
+//   the whole machine like the user's own `codex`, and the policy is the only check left.
 // - the team tools (send_message, ask_user, update_task...) are dynamic tools answered here
 // - none of the user's own Codex setup leaks in: their MCP servers, plugins, apps, web search,
 //   image generation and notify hooks are off for agent threads (their Codex app is untouched)
@@ -64,6 +66,24 @@ export function codexWebSearch(web: boolean | undefined): CodexWebSearch {
   return web ? 'live' : 'disabled';
 }
 
+/** Codex's sandbox modes, as `codex --sandbox` spells them. */
+export const CODEX_SANDBOX = ['read-only', 'workspace-write', 'danger-full-access'] as const;
+export type CodexSandbox = (typeof CODEX_SANDBOX)[number];
+
+/**
+ * Which sandbox an agent's thread runs in: none with `full`, read-only for a lead that may
+ * neither write nor reach the network, workspace-write for everyone else.
+ *
+ * Both of the lead's exceptions are forced by the sandbox, not chosen: Codex honours
+ * `network_access` only under workspace-write, and a read-only thread cannot write at all, so a
+ * lead granted either capability would otherwise be refused by the sandbox while the policy was
+ * allowing it. The policy is what actually governs the lead's tools (policy.ts).
+ */
+export function sandboxMode(role: Role, caps: AgentCapabilities | undefined): CodexSandbox {
+  if (caps?.full) return 'danger-full-access';
+  return role === 'lead' && !caps?.network && !caps?.write ? 'read-only' : 'workspace-write';
+}
+
 function notes(role: Role, tools: AgentTool[], caps?: AgentCapabilities): string {
   return [
     '',
@@ -74,6 +94,9 @@ function notes(role: Role, tools: AgentTool[], caps?: AgentCapabilities): string
     `- Every command is checked against AgentCraft's policy, and anything it cannot allow by itself is shown to ${userName()}, who may deny it. Never work around a denial: find another way or use ask_user.`,
     `- Do not spawn sub-agents, do not search the web, and ask questions only with ask_user (not request_user_input).`,
     role === 'lead' && !caps?.write ? '- You are read-only: never modify files or run commands that change anything.' : '',
+    caps?.full
+      ? `- You are running with full access: no sandbox. You can read and write anywhere ${userName()} can and run anything, exactly like \`codex\` in their terminal. So when they ask for something done, do it; never hand back a list of commands for them to run instead. Outside the repositories you work in, stay with what the job needs.`
+      : '',
   ]
     .filter((l) => l !== '')
     .join('\n');
@@ -229,13 +252,10 @@ export class CodexEngine implements Engine {
       const thread = {
         cwd,
         approvalPolicy: 'untrusted',
-        // Codex only honours `network_access` inside the workspace-write sandbox: a read-only
-        // thread has no network at all, whatever that setting says (verified against the
-        // binary). So a lead granted the network capability has to run workspace-write, or it
-        // cannot resolve a host, and `gh` reports its token as invalid because it cannot
-        // reach GitHub to check it. Writing files is still refused for the lead by the
-        // permission policy (policy.ts), which is the layer that actually governs its tools.
-        sandbox: role === 'lead' && !spec.capabilities?.network ? 'read-only' : 'workspace-write',
+        // `full` turns the sandbox off outright (danger-full-access): the only way an agent
+        // reaches the rest of the machine - the user's dotfiles, their other checkouts, a global
+        // install - the way their own terminal does. See sandboxMode for the lead's two cases.
+        sandbox: sandboxMode(role, spec.capabilities),
         config: this.threadConfig(userConfig, spec, serverEnv),
         developerInstructions: spec.instructions + notes(role, spec.tools, spec.capabilities),
         dynamicTools,

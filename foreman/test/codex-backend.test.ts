@@ -226,7 +226,7 @@ describe('codex engine (fake app-server)', () => {
       const engine = new CodexEngine(isolated.fm, isolated.cfg.codex);
       const backend = new TeamBackend(isolated.fm, isolated.cfg.claude, { name: 'codex', engines: { lead: engine, worker: engine } });
       const turn = { signal: new AbortController().signal } as never;
-      const gate = backend['permissionGate']('kit', 'worker', wt.path, turn);
+      const gate = backend['permissionGate']('kit', 'worker', wt.path, turn, backend.capsFor('kit', 'worker', repo.id));
 
       const before = isolated.fm.bus.inbox('kit').length;
       const answer = await gate('Bash', { command: 'env -i npm test' }, new AbortController().signal, undefined);
@@ -255,7 +255,7 @@ describe('codex engine (fake app-server)', () => {
       const engine = new CodexEngine(isolated.fm, isolated.cfg.codex);
       const backend = new TeamBackend(isolated.fm, isolated.cfg.claude, { name: 'codex', engines: { lead: engine, worker: engine } });
       const turn = { signal: new AbortController().signal } as never;
-      const gate = backend['permissionGate']('kit', 'worker', wt.path, turn);
+      const gate = backend['permissionGate']('kit', 'worker', wt.path, turn, backend.capsFor('kit', 'worker', repo.id));
       const sig = () => new AbortController().signal;
 
       expect(isolated.fm.permissionMode()).toBe('ask');

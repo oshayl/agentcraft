@@ -4,9 +4,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { MessageBus } from './bus.js';
+import { CLOSED, describeCapabilities, type AgentCapabilities, type RoleCapabilities } from './capabilities.js';
 import { loadCast, type CastMember } from './cast.js';
 import type { Config } from './config.js';
-import { FOREMAN_VERSION } from './config.js';
+import { capsFrom, FOREMAN_VERSION } from './config.js';
 import { consoleLogger, type Ctx, type Logger } from './context.js';
 import { DecisionError, DecisionQueue, type CreateDecisionInput } from './decisions.js';
 import { Memory, MemoryError } from './memory.js';
@@ -49,6 +50,8 @@ export interface Backend {
   onMergeConflict?(task: Task, info: { base: string; branch: string; files: string[]; reason: string }): boolean;
   onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize', arg?: string): void;
   onAgentAction(agentId: string, action: 'pause' | 'resume' | 'stop' | 'spawn', arg?: string): Promise<void> | void;
+  /** How far this repository's lead and workers may reach right now (see capabilities.ts). */
+  capabilitiesFor?(repoId: string): { lead: AgentCapabilities; worker: AgentCapabilities };
 }
 
 export type Reply = (msg: Outbound) => void;
@@ -478,6 +481,56 @@ export class Foreman {
     );
   }
 
+  /** Per-repository capability overrides (capabilities.ts), applied over the config file's roles. */
+  repoCapabilities(): Record<string, RoleCapabilities> {
+    return (this.store.data.repoCaps ??= {});
+  }
+
+  /** What one repository's agents may reach now: the backend's answer, or closed if it has none. */
+  private capabilitiesOf(repoId: string): { lead: AgentCapabilities; worker: AgentCapabilities } {
+    return this.backend?.capabilitiesFor?.(repoId) ?? { lead: CLOSED, worker: CLOSED };
+  }
+
+  /** "demo-app: lead full | workers mcp, web (set for this repo)" */
+  private capabilityLine(repoId: string): string {
+    const r = this.repos.require(repoId);
+    const caps = this.capabilitiesOf(repoId);
+    const override = this.repoCapabilities()[repoId];
+    const set = [override?.lead && 'lead', override?.worker && 'workers'].filter(Boolean).join(' and ');
+    return `${r.name}: lead ${describeCapabilities(caps.lead)} | workers ${describeCapabilities(caps.worker)}${set ? ` (${set} set for this repo)` : ''}`;
+  }
+
+  /**
+   * Change how far one repository's agents may reach, or (caps undefined) drop the override and
+   * go back to what config.json says. Returns the line to report.
+   */
+  setRepoCapabilities(repoId: string, role: 'lead' | 'worker' | undefined, caps: Partial<AgentCapabilities> | undefined): string {
+    const r = this.repos.require(repoId);
+    const before = this.capabilitiesOf(repoId);
+    const all = this.repoCapabilities();
+    const roles: Array<'lead' | 'worker'> = role ? [role] : ['lead', 'worker'];
+    if (!caps) {
+      const entry = all[repoId];
+      if (entry) for (const ro of roles) delete entry[ro];
+      if (entry && !entry.lead && !entry.worker) delete all[repoId];
+    } else {
+      const entry = (all[repoId] ??= {});
+      for (const ro of roles) entry[ro] = { ...caps };
+    }
+    this.store.markDirty();
+    const after = this.capabilitiesOf(repoId);
+    const who = role === 'lead' ? 'The lead' : role === 'worker' ? 'Workers' : 'Agents';
+    const changed = roles.filter((ro) => describeCapabilities(before[ro]) !== describeCapabilities(after[ro]));
+    const line = `${who} in ${r.name}: ${roles.map((ro) => `${ro === 'worker' ? 'workers' : ro} ${describeCapabilities(after[ro])}`).join(' | ')}${caps ? '' : ' (back to the config file)'}`;
+    this.bus.feed('system', changed.length ? `${line}. They start a fresh thread on their next turn, because a thread keeps the rules it was started with.` : line);
+    // Full access is worth saying out loud once, where the user can see it: nothing below the
+    // permission policy confines such an agent any more.
+    if (changed.length && roles.some((ro) => after[ro].full && !before[ro].full)) {
+      this.bus.feed('system', `Full access means no sandbox: in ${r.name} they read and write anywhere you can and run anything, like your own terminal. Permission mode ${this.permissionMode()} decides what still comes to you.`);
+    }
+    return line;
+  }
+
   setStatus(patch: Partial<ForemanStatus>): void {
     const next = { ...this.status, ...patch };
     if (JSON.stringify(next) === JSON.stringify(this.status)) return;
@@ -568,6 +621,29 @@ export class Foreman {
         const mode = msg.mode ?? (this.permissionMode() === 'ask' ? 'auto' : 'ask');
         this.setPermissionMode(mode);
         return { mode };
+      }
+      case 'caps.set': {
+        const repos = msg.repoId ? [this.repos.require(msg.repoId)] : this.repos.list();
+        if (!repos.length) throw new ClientError('no repos registered');
+        // No repo named, nothing to apply: report instead of guessing which repo was meant.
+        if (msg.caps === undefined || !msg.repoId) {
+          const lines = repos.map((r) => this.capabilityLine(r.id));
+          if (msg.caps !== undefined) lines.push(`Name the repo to change: /caps <${repos.map((r) => r.id).join('|')}> ${msg.caps}`);
+          for (const l of lines) this.bus.feed('system', l);
+          return { lines };
+        }
+        const word = msg.caps.trim().toLowerCase();
+        // a misspelled capability is the user's typo, not an internal error
+        const parse = (): Partial<AgentCapabilities> => {
+          try {
+            return capsFrom(msg.caps, `repo ${msg.repoId}`) ?? {};
+          } catch (e) {
+            throw new ClientError((e as Error).message);
+          }
+        };
+        const caps = word === 'default' || word === 'reset' ? undefined : parse();
+        const line = this.setRepoCapabilities(msg.repoId, msg.role, caps);
+        return { lines: [line] };
       }
       case 'repo.fix': {
         const targets = msg.repoId ? [this.repos.require(msg.repoId)] : this.repos.list();

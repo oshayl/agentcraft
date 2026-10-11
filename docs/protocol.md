@@ -1047,6 +1047,28 @@ Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-ga
 }
 ```
 
+### `caps.set`
+
+Change how far one repository's agents may reach, from the console (`/caps [repo] [lead|worker] <list>`), without editing config.json or restarting. Answered with `{lines}`, which are also written to the feed. The override is per repo, persists across restarts, and wins over the roles in config.json; an agent whose capabilities changed starts a fresh thread on its next turn.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `repoId` | string | no | the repo whose agents this changes; omitted = report every repo and change nothing |
+| `role` | `lead` \| `worker` | no | omitted = both the lead and the workers |
+| `caps` | string | no | comma-separated capability names (network, push, mcp, web, write, force, full), "all", "none", or "default" to drop the override and go back to config.json. Names are added to what config.json already grants that role, so "none" is how everything closes again. Omitted = report what this repo has now. "full" means no sandbox: the agent reaches the whole machine like the user own terminal. |
+
+```json
+{
+  "v": 1,
+  "type": "caps.set",
+  "id": "c21",
+  "repoId": "demo-app",
+  "role": "lead",
+  "caps": "full"
+}
+```
+
 ### `repo.fix`
 
 Clear what is blocking work, from the console (`/fix [park|unpark|deps] [repo]`), without leaving the game. Answered with `{lines}`, one per repo acted on, which are also written to the feed.

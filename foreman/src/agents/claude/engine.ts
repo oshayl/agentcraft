@@ -79,6 +79,9 @@ export class ClaudeEngine implements Engine {
       // no allowedTools: every tool call (incl. our MCP tools) goes through canUseTool/policy.
       // Subagents are always off; the web tools and `git push` are off unless this agent has
       // the matching capability, in which case the policy decides each call (capabilities.ts).
+      // There is no sandbox here to switch off, so the `full` capability adds nothing of its own
+      // for a Claude agent: it reaches the machine through the write/push/force it implies, and
+      // the policy is what governs each call either way.
       disallowedTools: [
         'Task',
         'Agent',

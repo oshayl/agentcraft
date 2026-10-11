@@ -11,6 +11,7 @@
 // state.json is written atomically (temp + fsync + rename), debounced, and flushed on exit.
 import fs from 'node:fs';
 import path from 'node:path';
+import type { RoleCapabilities } from './capabilities.js';
 import type { Agent, Decision, FeedItem, Goal, LogEntry, Repo, Task } from './protocol.js';
 import { ensureDir, readJson, writeJsonAtomic } from './util/fsx.js';
 
@@ -70,6 +71,12 @@ export interface StateData {
    *  allowed without asking. Hard denials (pushes, git network, env -i) are refused in BOTH
    *  modes, and merges are never auto-answered: they are not permission decisions. */
   permissionMode: 'ask' | 'auto';
+  /**
+   * Per-repository capability overrides set while the game runs (`caps.set`, `/caps`,
+   * `agentcraft --caps`), applied over `capabilities` from config.json and winning over it.
+   * Keyed by repo id; see capabilities.ts.
+   */
+  repoCaps: Record<string, RoleCapabilities>;
   /** opaque backend-owned state (e.g. sim progress) */
   backend: Record<string, unknown>;
 }
@@ -118,6 +125,7 @@ function emptyState(now: number): StateData {
     worktreeMeta: {},
     permissionRules: {},
     permissionMode: 'ask',
+    repoCaps: {},
     backend: {},
   };
 }

@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -64,6 +64,13 @@ public final class ConsoleCommands {
 
 	/** {@code mode}: "ask" | "auto", or null to cycle. */
 	public record Permissions(@Nullable String mode) implements Intent {
+	}
+
+	/**
+	 * How far one repo's agents may reach. {@code caps}: a capability list, "all", "none" or
+	 * "default" (back to the config file); null = report. {@code role} null = lead and workers.
+	 */
+	public record Caps(@Nullable String repoId, @Nullable String role, @Nullable String caps) implements Intent {
 	}
 
 	public record Repos() implements Intent {
@@ -116,6 +123,7 @@ public final class ConsoleCommands {
 		new Command("repos", "/repos", "list repos"),
 		new Command("fix", "/fix [review|land|park|unpark|deps] [repo]", "review or clear what is blocking work"),
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
+		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
 		new Command("status", "/status", "goal, agents, tasks and decisions"),
 		new Command("sound", "/sound on|off", "decision bell and done chime"),
 		new Command("clear", "/clear", "clear the console's own lines"),
@@ -190,6 +198,7 @@ public final class ConsoleCommands {
 			case "repos" -> new Repos();
 			case "fix" -> parseFix(args, s);
 			case "permissions", "perms" -> parsePermissions(args);
+			case "caps", "capabilities", "access" -> parseCaps(args, s);
 			case "pause", "resume", "stop", "spawn" -> parseAgentAction(cmd, args, s);
 			case "task", "t" -> parseTask(args, s);
 			case "diff" -> parseDiff(args, s);
@@ -247,6 +256,76 @@ public final class ConsoleCommands {
 		}
 		String m = args.get(0).toLowerCase(Locale.ROOT);
 		return PERMISSION_MODES.contains(m) ? new Permissions(m) : new Invalid("usage: /permissions [ask|auto]");
+	}
+
+	/** Capability names the Foreman accepts, plus the three words that stand for a whole set. */
+	static final List<String> CAP_NAMES = List.of("full", "all", "none", "default", "network", "push", "mcp", "web", "write", "force");
+	static final java.util.Map<String, String> CAP_HINTS = java.util.Map.of(
+		"full", "no sandbox: the whole machine, like your own terminal",
+		"all", "every capability, sandbox included",
+		"none", "closed again: no network, no pushes, no plugins",
+		"default", "drop this repo's override, follow the config file",
+		"network", "git fetch/clone and the sandbox's network",
+		"push", "push its own branch (implies network)",
+		"mcp", "your own MCP servers and plugins",
+		"web", "web search and fetch",
+		"write", "the lead may change files, like a worker",
+		"force", "force-push, delete a branch, push to a base branch");
+	private static final List<String> CAP_ROLES = List.of("lead", "worker", "workers", "both");
+
+	/**
+	 * {@code /caps} reports every repo; {@code /caps agentcraft full} grants it; {@code /caps
+	 * agentcraft lead full} grants it to the lead alone. The repo comes first because that is
+	 * what the grant is scoped to.
+	 */
+	private static Intent parseCaps(List<String> args, ForemanState s) {
+		if (args.isEmpty()) {
+			return new Caps(null, null, null);
+		}
+		String repoId = null;
+		String role = null;
+		String caps = null;
+		for (String arg : args) {
+			String a = arg.toLowerCase(Locale.ROOT);
+			if (role == null && CAP_ROLES.contains(a)) {
+				role = a.equals("workers") ? "worker" : a.equals("both") ? null : a;
+				continue;
+			}
+			if (caps == null && isCapList(a)) {
+				caps = a;
+				continue;
+			}
+			if (repoId != null) {
+				return new Invalid("usage: /caps [repo] [lead|worker] <" + String.join("|", CAP_NAMES) + ">");
+			}
+			String found = null;
+			for (Repo r : s.repos().values()) {
+				if (r.id().equalsIgnoreCase(a) || r.name().equalsIgnoreCase(a)) {
+					found = r.id();
+				}
+			}
+			if (found == null) {
+				return new Invalid("no repo named " + arg + " (" + String.join(", ", s.repos().keySet()) + ")");
+			}
+			repoId = found;
+		}
+		if (caps != null && repoId == null) {
+			return new Invalid("name the repo: /caps <" + String.join("|", s.repos().keySet()) + "> " + caps);
+		}
+		return new Caps(repoId, role, caps);
+	}
+
+	/** "full", "network,push" - every comma-separated part has to be a capability name. */
+	private static boolean isCapList(String a) {
+		if (a.isEmpty()) {
+			return false;
+		}
+		for (String part : a.split(",", -1)) {
+			if (!CAP_NAMES.contains(part.strip())) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static final List<String> FIX_ACTIONS = List.of("report", "review", "land", "park", "unpark", "deps");
@@ -534,6 +613,8 @@ public final class ConsoleCommands {
 			case RepoAdd r -> "add repo";
 			case RepoFix f -> "fix: " + f.action() + (f.repoId() != null ? " " + f.repoId() : "");
 			case Permissions p -> p.mode() == null ? "cycle permissions" : "permissions: " + p.mode();
+			case Caps c -> c.caps() == null ? "show what agents may reach"
+				: (c.role() == null ? "" : c.role() + " in ") + repoName(c.repoId(), s) + ": " + c.caps();
 			case Repos r -> "list repos";
 			case AgentAction a -> a.action() + " " + (a.agentIds().size() == 1 ? displayName(a.agentIds().get(0), s) : a.agentIds().size() + " agents");
 			case TaskAction t -> t.action() + " " + t.taskId();
@@ -678,6 +759,29 @@ public final class ConsoleCommands {
 					for (Repo r : s.repos().values()) {
 						if (r.id().toLowerCase(Locale.ROOT).startsWith(lower)) {
 							out.add(new Completion(ts, cursor, r.id(), r.id(), r.name(), null, null));
+						}
+					}
+				}
+			}
+			case "/caps", "/capabilities", "/access" -> {
+				// repo first, then the capability list (the role is optional, so it is offered too)
+				if (argIndex == 1) {
+					for (Repo r : s.repos().values()) {
+						if (r.id().toLowerCase(Locale.ROOT).startsWith(lower)) {
+							out.add(new Completion(ts, cursor, r.id() + " ", r.id(), r.name(), null, null));
+						}
+					}
+				} else if (argIndex >= 2) {
+					for (String c : CAP_NAMES) {
+						if (c.startsWith(lower)) {
+							out.add(new Completion(ts, cursor, c, c, CAP_HINTS.get(c), null, null));
+						}
+					}
+					if (argIndex == 2) {
+						for (String r : List.of("lead", "worker")) {
+							if (r.startsWith(lower)) {
+								out.add(new Completion(ts, cursor, r + " ", r, r.equals("lead") ? "Marlow only" : "the workers only", null, null));
+							}
 						}
 					}
 				}
@@ -860,6 +964,11 @@ public final class ConsoleCommands {
 				m.put("repoId", f.repoId());
 			}
 			case Permissions p -> m.put("mode", p.mode());
+			case Caps c -> {
+				m.put("repoId", c.repoId());
+				m.put("role", c.role());
+				m.put("caps", c.caps());
+			}
 			case AgentAction a -> {
 				m.put("agents", a.agentIds());
 				m.put("action", a.action());

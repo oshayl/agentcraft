@@ -93,6 +93,14 @@ public final class Foreman {
 		return link.send(ForemanJson.msg("permissions.set").put("mode", mode).json());
 	}
 
+	/**
+	 * How far one repo's agents may reach. {@code caps}: a capability list, "all", "none" or
+	 * "default"; null = report, change nothing. {@code role} null = the lead and the workers.
+	 */
+	public static CompletableFuture<Ack> setCaps(@Nullable String repoId, @Nullable String role, @Nullable String caps) {
+		return link.send(ForemanJson.msg("caps.set").put("repoId", repoId).put("role", role).put("caps", caps).json());
+	}
+
 	/** Structured diff of a worktree (or an agent id: its current worktree) vs its base. */
 	public static CompletableFuture<Diff> requestDiff(String repoId, String worktree) {
 		return link.requestDiff(repoId, worktree);

@@ -27,7 +27,7 @@ import type { ClaudeConfig } from '../config.js';
 import { FOREMAN_VERSION } from '../config.js';
 import { ClientError, type Backend, type Foreman } from '../foreman.js';
 import { withGitSafety } from '../gitsafety.js';
-import { describeCapabilities, resolveCapabilities, type AgentCapabilities, type CapabilityConfig } from '../capabilities.js';
+import { describeCapabilities, resolveCapabilities, withRepoCapabilities, type AgentCapabilities, type CapabilityConfig } from '../capabilities.js';
 import { agentGitIdentity } from '../util/git.js';
 import { classifyToolUse, describeRuleKey, describeToolCall } from '../policy.js';
 import type { BackendName, Decision, Goal, Task } from '../protocol.js';
@@ -317,6 +317,12 @@ export class TeamBackend implements Backend {
     const lead = describeCapabilities(this.capsFor(LEAD, 'lead'));
     const worker = describeCapabilities(this.capsFor(this.team.find((a) => a !== LEAD) ?? 'worker', 'worker'));
     this.fm.log.info(`capabilities: lead ${lead} | workers ${worker}`);
+    for (const repoId of Object.keys(this.capabilityConfig().byRepo ?? {})) {
+      const r = this.fm.repos.get(repoId);
+      if (!r) continue;
+      const per = this.capabilitiesFor(repoId);
+      this.fm.log.info(`capabilities in ${r.name}: lead ${describeCapabilities(per.lead)} | workers ${describeCapabilities(per.worker)}`);
+    }
     this.fm.setStatus({ auth: 'ok', account: accounts.join(' · '), message: this.teamLabel() });
     return true;
   }
@@ -671,21 +677,37 @@ export class TeamBackend implements Backend {
     }
   }
 
-  private cwdFor(job: Job): { cwd: string; role: 'lead' | 'worker' } {
+  private cwdFor(job: Job): { cwd: string; role: 'lead' | 'worker'; repoId: string } {
     if (job.agentId === LEAD) {
       const goal = job.goalId ? this.fm.goal(job.goalId) : this.fm.currentGoal();
       const repo = goal?.repoId ? this.fm.repos.get(goal.repoId) : this.fm.repos.defaultRepo();
       if (!repo) throw new Error('no repo for the lead');
-      return { cwd: repo.path, role: 'lead' };
+      return { cwd: repo.path, role: 'lead', repoId: repo.id };
     }
     const t = job.taskId ? this.fm.tasks.get(job.taskId) : undefined;
     if (!t?.worktree || !t.repoId) throw new Error(`job for ${job.agentId} has no worktree`);
-    return { cwd: this.fm.repos.requireWorktree(t.repoId, t.worktree).path, role: 'worker' };
+    return { cwd: this.fm.repos.requireWorktree(t.repoId, t.worktree).path, role: 'worker', repoId: t.repoId };
   }
 
-  /** How far one agent may reach outside its worktree (config.json "capabilities"). */
-  capsFor(agentId: string, role: Role): AgentCapabilities {
-    return resolveCapabilities(this.opts.capabilities, role, agentId);
+  /**
+   * The capability config in force: config.json's, with the per-repository overrides the user
+   * set while the game runs (`/caps`) merged over it.
+   */
+  private capabilityConfig(): CapabilityConfig {
+    return withRepoCapabilities(this.opts.capabilities, this.fm.repoCapabilities());
+  }
+
+  /** How far one agent may reach outside its worktree (config.json "capabilities", `/caps`). */
+  capsFor(agentId: string, role: Role, repoId?: string): AgentCapabilities {
+    return resolveCapabilities(this.capabilityConfig(), role, agentId, repoId);
+  }
+
+  /** For the Foreman's `/caps` report: what this repository's lead and workers may reach. */
+  capabilitiesFor(repoId: string): { lead: AgentCapabilities; worker: AgentCapabilities } {
+    return {
+      lead: this.capsFor(LEAD, 'lead', repoId),
+      worker: this.capsFor(this.team.find((a) => a !== LEAD) ?? 'worker', 'worker', repoId),
+    };
   }
 
   /**
@@ -697,7 +719,7 @@ export class TeamBackend implements Backend {
   }
 
   /** The policy, and the user for whatever it cannot allow by itself (a permission decision). */
-  private permissionGate(agentId: string, role: Role, cwd: string, turn: TurnHandle): PermissionGate {
+  private permissionGate(agentId: string, role: Role, cwd: string, turn: TurnHandle, capabilities: AgentCapabilities): PermissionGate {
     return async (toolName, input, signal, title) => {
       // a stopped/paused/cancelled turn runs nothing more, even if its CLI has not exited yet
       if (turn.signal.aborted) return { allow: false, message: `Your turn was stopped by ${userName()}.`, interrupt: true };
@@ -708,7 +730,7 @@ export class TeamBackend implements Backend {
         alwaysAllow: this.fm.store.data.permissionRules[agentId] ?? [],
         mcpServer: TEAM_MCP_SERVER,
         leadReadCommands: this.cfg.leadReadCommands,
-        capabilities: this.capsFor(agentId, role),
+        capabilities,
         protectedBranches: this.protectedBranches(),
       });
       if (verdict.action === 'allow') return { allow: true };
@@ -821,10 +843,14 @@ export class TeamBackend implements Backend {
       const where = this.cwdFor(job);
       cwd = where.cwd;
       const role = where.role;
+      // Capabilities can differ per repository (`/caps`), so they are resolved once here, for
+      // this job's repo, and the same object is used by the prompt, the environment, the engine
+      // and the permission gate: they must not disagree about what this agent may do.
+      const capabilities = this.capsFor(agentId, role, where.repoId);
       const engine = this.engineFor(agentId);
       const session = this.fm.store.data.sessions[job.sessionKey];
       // a session belongs to the engine that made it (records from before engines were Claude's)
-      const caps = describeCapabilities(this.capsFor(agentId, role));
+      const caps = describeCapabilities(capabilities);
       // Capabilities changed since this thread started: its history still holds the old rules,
       // so resuming would keep the agent believing them. Start a new thread instead.
       // An exact match only. A session recorded before capabilities existed has no fingerprint,
@@ -837,10 +863,10 @@ export class TeamBackend implements Backend {
       this.fm.store.markDirty();
 
       let systemAppend: string;
-      if (role === 'lead') systemAppend = leadSystemPrompt(this.fm, this.team, this.capsFor(agentId, role));
+      if (role === 'lead') systemAppend = leadSystemPrompt(this.fm, this.team, capabilities);
       else {
         const t = this.fm.tasks.require(job.taskId!);
-        systemAppend = workerSystemPrompt(this.fm, agentId, this.fm.repos.requireWorktree(t.repoId!, t.worktree!), this.capsFor(agentId, role));
+        systemAppend = workerSystemPrompt(this.fm, agentId, this.fm.repos.requireWorktree(t.repoId!, t.worktree!), capabilities);
       }
       const model = engine.model(role);
       this.fm.agentLog(agentId, 'text', `${resume ? 'Resuming' : 'Starting'} ${job.kind}${job.taskId ? ` ${job.taskId}` : ''} (${engine.id === 'claude' ? model : `${engine.label} ${model}`})`);
@@ -858,12 +884,12 @@ export class TeamBackend implements Backend {
           prompt,
           instructions: systemAppend,
           ...(resume ? { resume } : {}),
-          env: agentEnv(process.env, { agentId, cwd, capabilities: this.capsFor(agentId, role) }),
+          env: agentEnv(process.env, { agentId, cwd, capabilities }),
           writableRoots: await this.writableRoots(role, job),
-          capabilities: this.capsFor(agentId, role),
+          capabilities,
           abort,
           turn,
-          permission: this.permissionGate(agentId, role, cwd, turn),
+          permission: this.permissionGate(agentId, role, cwd, turn, capabilities),
           tools: agentTools(this.fm, agentId, role, this.hooks, turn),
           // a stopped turn's whole process tree is ended before its worktree is handed on
           onProcess: (child) => {

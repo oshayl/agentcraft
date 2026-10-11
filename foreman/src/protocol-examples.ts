@@ -195,4 +195,5 @@ export const CLIENT_EXAMPLES: Ex<ClientMessage> = {
   'repo.add': { v: 1, type: 'repo.add', id: 'c18', path: 'C:\\Projects\\agentcraft\\sandbox\\demo-app' },
   'repo.fix': { v: 1, type: 'repo.fix', id: 'c19', action: 'park', repoId: 'demo-app' },
   'permissions.set': { v: 1, type: 'permissions.set', id: 'c20', mode: 'auto' },
+  'caps.set': { v: 1, type: 'caps.set', id: 'c21', repoId: 'demo-app', role: 'lead', caps: 'full' },
 };

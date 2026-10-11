@@ -1,5 +1,5 @@
 // Configuration: defaults < <AGENTCRAFT_HOME>/config.json < environment < CLI flags.
-import { CLOSED, type AgentCapabilities, type CapabilityConfig } from './capabilities.js';
+import { CAPABILITY_NAMES, CLOSED, type AgentCapabilities, type CapabilityConfig, type RoleCapabilities } from './capabilities.js';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -77,7 +77,7 @@ export interface SimConfig {
 }
 
 /** "network,push,mcp,web" (flag/env) or {"network": true} / ["network"] (config.json). */
-function capsFrom(v: unknown, label: string): Partial<AgentCapabilities> | undefined {
+export function capsFrom(v: unknown, label: string): Partial<AgentCapabilities> | undefined {
   if (v === undefined || v === null) return undefined;
   const names = typeof v === 'string' ? v.split(',') : Array.isArray(v) ? v.map(String) : undefined;
   if (names) {
@@ -85,20 +85,36 @@ function capsFrom(v: unknown, label: string): Partial<AgentCapabilities> | undef
     for (const raw of names) {
       const n = raw.trim().toLowerCase();
       if (!n) continue;
-      if (n === 'all') return { network: true, push: true, mcp: true, web: true, write: true, force: true };
+      if (n === 'all') return Object.fromEntries(CAPABILITY_NAMES.map((c) => [c, true]));
       if (n === 'none' || n === 'closed') return { ...CLOSED };
-      if (n !== 'network' && n !== 'push' && n !== 'mcp' && n !== 'web' && n !== 'write' && n !== 'force') throw new Error(`unknown ${label} capability "${raw.trim()}" (use network, push, mcp, web, write, force, all or none)`);
-      out[n] = true;
+      if (!(CAPABILITY_NAMES as readonly string[]).includes(n)) throw new Error(`unknown ${label} capability "${raw.trim()}" (use ${CAPABILITY_NAMES.join(', ')}, all or none)`);
+      out[n as (typeof CAPABILITY_NAMES)[number]] = true;
     }
     return out;
   }
   if (typeof v === 'object') {
     const o = v as Record<string, unknown>;
     const out: Partial<AgentCapabilities> = {};
-    for (const k of ['network', 'push', 'mcp', 'web', 'write', 'force'] as const) if (k in o) out[k] = !!o[k];
+    for (const k of CAPABILITY_NAMES) if (k in o) out[k] = !!o[k];
     return out;
   }
   throw new Error(`${label} capabilities must be a list or an object`);
+}
+
+/**
+ * One repository's entry in `capabilities.byRepo`: either a capability list for both roles
+ * ("full") or a per-role object ({"lead": "full", "worker": "mcp,web"}).
+ */
+function roleCapsFrom(v: unknown, label: string): RoleCapabilities {
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('lead' in v || 'worker' in v)) {
+    const o = v as Record<string, unknown>;
+    return {
+      ...(o.lead === undefined ? {} : { lead: capsFrom(o.lead, `${label} lead`) ?? {} }),
+      ...(o.worker === undefined ? {} : { worker: capsFrom(o.worker, `${label} worker`) ?? {} }),
+    };
+  }
+  const both = capsFrom(v, label) ?? {};
+  return { lead: both, worker: { ...both } };
 }
 
 export interface Config {
@@ -359,6 +375,9 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv = process.env)
       ...(capsFrom(flags['worker-caps'] ?? env.AGENTCRAFT_WORKER_CAPS ?? fileCaps.worker, 'worker') ? { worker: capsFrom(flags['worker-caps'] ?? env.AGENTCRAFT_WORKER_CAPS ?? fileCaps.worker, 'worker')! } : {}),
       ...(fileCaps.byAgent && typeof fileCaps.byAgent === 'object'
         ? { byAgent: Object.fromEntries(Object.entries(fileCaps.byAgent as Record<string, unknown>).map(([a, v]) => [a, capsFrom(v, a) ?? {}])) }
+        : {}),
+      ...(fileCaps.byRepo && typeof fileCaps.byRepo === 'object'
+        ? { byRepo: Object.fromEntries(Object.entries(fileCaps.byRepo as Record<string, unknown>).map(([r, v]) => [r, roleCapsFrom(v, `repo ${r}`)])) }
         : {}),
     },
     sim: {
