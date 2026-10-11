@@ -20,6 +20,8 @@ import org.jspecify.annotations.Nullable;
  */
 public final class MemoryIndex {
 	public static final String ALL = "";
+	/** The scope holding the team's artifacts: the result of a goal, with its open items. */
+	public static final String ARTIFACTS = "artifacts";
 
 	private static long revision = -1;
 	private static List<MemoryEntry> all = List.of();
@@ -83,6 +85,7 @@ public final class MemoryIndex {
 		all = List.copyOf(list);
 		Map<String, Integer> c = new LinkedHashMap<>();
 		c.put("shared", 0);
+		c.put(ARTIFACTS, 0);
 		for (String id : Cast.ids()) {
 			c.put(id, 0);
 		}
@@ -95,6 +98,29 @@ public final class MemoryIndex {
 	}
 
 	private static List<String> orderedScopes = List.of();
+
+	public static boolean isArtifact(MemoryEntry e) {
+		return ARTIFACTS.equals(e.scope());
+	}
+
+	/** Open checkboxes in an artifact: "3 open of 7", or null when it has none. */
+	public static @Nullable String itemCount(MemoryEntry e) {
+		int open = 0;
+		int all = 0;
+		for (String line : e.body().split("\n")) {
+			String t = line.strip();
+			if (t.startsWith("- [ ]") || t.startsWith("* [ ]")) {
+				open++;
+				all++;
+			} else if (t.startsWith("- [x]") || t.startsWith("- [X]") || t.startsWith("* [x]") || t.startsWith("* [X]")) {
+				all++;
+			}
+		}
+		if (all == 0) {
+			return null;
+		}
+		return open == 0 ? "all " + all + " done" : open + " open of " + all;
+	}
 
 	/** The lead's plan: id {@code shared/plan}, or a shared/lead entry titled "Plan...". */
 	public static boolean isPlan(MemoryEntry e) {
@@ -115,6 +141,11 @@ public final class MemoryIndex {
 
 	/** Entries of a scope ({@link #ALL} = every scope), plan first, then newest first. */
 	public static List<MemoryEntry> entries(@Nullable String scope) {
+		// a read-only folder (a vault) is fetched, not held in the snapshot, and is never part
+		// of "All": thousands of someone's own notes would bury the team's dozen
+		if (FileNotes.isSource(scope)) {
+			return FileNotes.entries(scope);
+		}
 		refresh();
 		if (scope == null || scope.isEmpty()) {
 			return all;
@@ -158,13 +189,26 @@ public final class MemoryIndex {
 		return List.copyOf(out);
 	}
 
-	/** Scopes that have entries: shared first, then agents in cast order, then anything else. */
+	/** Scopes that have entries: shared, artifacts, agents in cast order, then the file sources. */
 	public static List<String> scopes() {
 		refresh();
-		return orderedScopes;
+		List<Protocol.LibrarySource> srcs = FileNotes.sources();
+		if (srcs.isEmpty()) {
+			return orderedScopes;
+		}
+		List<String> out = new ArrayList<>(orderedScopes);
+		for (Protocol.LibrarySource src : srcs) {
+			if (!out.contains(src.id())) {
+				out.add(src.id());
+			}
+		}
+		return List.copyOf(out);
 	}
 
 	public static int count(@Nullable String scope) {
+		if (FileNotes.isSource(scope)) {
+			return FileNotes.entries(scope).size();
+		}
 		refresh();
 		if (scope == null || scope.isEmpty()) {
 			return all.size();
@@ -197,6 +241,12 @@ public final class MemoryIndex {
 		}
 		if (scope.equals("shared")) {
 			return "Shared";
+		}
+		if (scope.equals(ARTIFACTS)) {
+			return "Artifacts";
+		}
+		if (FileNotes.isSource(scope)) {
+			return FileNotes.label(scope);
 		}
 		return ReviewKit.agentName(scope);
 	}

@@ -188,6 +188,7 @@ Exact option labels: merge decisions use `Merge`, `Request changes`, `Reject`; p
 | `costUsd` | number | no | claude: estimated spend of this profile (sum over all sessions, survives restarts) |
 | `userName` | string | no | the person the team works for, as the agents address them (UI: "<name> answered") |
 | `permissionMode` | `ask` \| `auto` | no | 'ask' (default) prompts for every ask-verdict; 'auto' allows them without asking. Hard denials are refused in both, and merges always wait for the user. |
+| `libraries` | { id: string, label: string }[] | no | read-only markdown folders this Foreman can serve (config.json `library`), browsable with `library.request` |
 
 ### <a id="agentlogs"></a>AgentLogs
 
@@ -621,6 +622,40 @@ Memory entry written. Replace by `entry.id`.
 }
 ```
 
+### `library`
+
+Answer to `library.request`: the index of a read-only markdown folder (an Obsidian vault, a docs directory), or one note with its `body`. Never sent unasked: a real vault is thousands of notes, so nothing ships in the snapshot.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `requestId` | string | yes |  |
+| `source` | string | yes |  |
+| `items` | { id: string, title: string, folder: string, updated: integer, size: integer, body?: string }[] | yes | the index, or the one requested note |
+| `total` | integer | no | matches before the limit was applied |
+| `truncated` | boolean | no | the folder was too large to index in full |
+| `error` | string | no |  |
+
+```json
+{
+  "v": 1,
+  "type": "library",
+  "requestId": "r9",
+  "source": "vault",
+  "items": [
+    {
+      "id": "10 Projects/AgentCraft.md",
+      "title": "AgentCraft",
+      "folder": "10 Projects",
+      "updated": 1790850000000,
+      "size": 4210
+    }
+  ],
+  "total": 1,
+  "truncated": false
+}
+```
+
 ### `goal.upsert`
 
 Goal created or progress/status changed. Replace by `goal.id`; latest goal is current.
@@ -1044,6 +1079,30 @@ Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-ga
   "type": "permissions.set",
   "id": "c20",
   "mode": "auto"
+}
+```
+
+### `library.request`
+
+Browse a read-only markdown folder configured as a library (config.json `library`): the index, or one note. Answered with `library` to the asking client only.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `requestId` | string | yes |  |
+| `source` | string | yes | a library id from `status.libraries`, e.g. "vault" |
+| `note` | string | no | a note's path inside the library: answered with that note's text. Omitted = the index (titles and paths, no bodies) |
+| `query` | string | no | index only: every word must appear in the title or the path |
+| `limit` | integer | no | index only: how many notes to return (default 150, newest first) |
+
+```json
+{
+  "v": 1,
+  "type": "library.request",
+  "id": "c22",
+  "requestId": "r9",
+  "source": "vault",
+  "query": "agentcraft install"
 }
 ```
 

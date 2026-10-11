@@ -37,6 +37,13 @@ export interface SessionRecord {
    * this no longer matches, the turn starts a fresh thread instead of resuming.
    */
   caps?: string;
+  /**
+   * The team tools the session was started with ("ask_user,send_message,..."). A resumed thread
+   * keeps the tool list it was created with - a tool added by a later AgentCraft version is not
+   * in its registry, and the agent reports it as unavailable - so a changed list, like changed
+   * capabilities, means a fresh thread.
+   */
+  tools?: string;
   turns: number;
   costUsd: number;
   updatedAt: number;

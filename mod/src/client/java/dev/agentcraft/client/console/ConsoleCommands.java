@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Artifacts, Notes, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -71,6 +71,14 @@ public final class ConsoleCommands {
 	 * "default" (back to the config file); null = report. {@code role} null = lead and workers.
 	 */
 	public record Caps(@Nullable String repoId, @Nullable String role, @Nullable String caps) implements Intent {
+	}
+
+	/** Open the library on the Artifacts tab. {@code id} null = the newest artifact. */
+	public record Artifacts(@Nullable String id) implements Intent {
+	}
+
+	/** Browse a read-only folder (an Obsidian vault) in the library. {@code query} null = everything. */
+	public record Notes(String source, @Nullable String query) implements Intent {
 	}
 
 	public record Repos() implements Intent {
@@ -124,6 +132,8 @@ public final class ConsoleCommands {
 		new Command("fix", "/fix [review|land|park|unpark|deps] [repo]", "review or clear what is blocking work"),
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
+		new Command("artifacts", "/artifacts [id]", "what the team finished, with its open items"),
+		new Command("notes", "/notes [folder] [search]", "read your own markdown folders (vault, docs)"),
 		new Command("status", "/status", "goal, agents, tasks and decisions"),
 		new Command("sound", "/sound on|off", "decision bell and done chime"),
 		new Command("clear", "/clear", "clear the console's own lines"),
@@ -199,6 +209,8 @@ public final class ConsoleCommands {
 			case "fix" -> parseFix(args, s);
 			case "permissions", "perms" -> parsePermissions(args);
 			case "caps", "capabilities", "access" -> parseCaps(args, s);
+			case "artifacts", "artifact", "result", "results" -> new Artifacts(args.isEmpty() ? null : args.get(0));
+			case "notes", "vault", "library", "read" -> parseNotes(cmd, rest, args);
 			case "pause", "resume", "stop", "spawn" -> parseAgentAction(cmd, args, s);
 			case "task", "t" -> parseTask(args, s);
 			case "diff" -> parseDiff(args, s);
@@ -326,6 +338,35 @@ public final class ConsoleCommands {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * {@code /notes}, {@code /vault}, {@code /notes vault agentcraft install}. The first word is
+	 * the folder when it names one; everything after it is the search. With no folder the first
+	 * configured one is used, which is the common case (people have one vault).
+	 */
+	private static Intent parseNotes(String cmd, String rest, List<String> args) {
+		List<Protocol.LibrarySource> srcs = dev.agentcraft.client.library.FileNotes.sources();
+		if (srcs.isEmpty()) {
+			return new Invalid("no readable folders are configured (add one as \"library\" in ~/.agentcraft/config.json)");
+		}
+		String source = srcs.get(0).id();
+		String query = rest.strip();
+		// /vault ... names the folder by the command itself when one matches
+		for (Protocol.LibrarySource src : srcs) {
+			if (src.id().equalsIgnoreCase(cmd)) {
+				source = src.id();
+			}
+		}
+		if (!args.isEmpty()) {
+			for (Protocol.LibrarySource src : srcs) {
+				if (src.id().equalsIgnoreCase(args.get(0)) || src.label().equalsIgnoreCase(args.get(0))) {
+					source = src.id();
+					query = rest.substring(args.get(0).length()).strip();
+				}
+			}
+		}
+		return new Notes(source, query.isEmpty() ? null : query);
 	}
 
 	private static final List<String> FIX_ACTIONS = List.of("report", "review", "land", "park", "unpark", "deps");
@@ -615,6 +656,8 @@ public final class ConsoleCommands {
 			case Permissions p -> p.mode() == null ? "cycle permissions" : "permissions: " + p.mode();
 			case Caps c -> c.caps() == null ? "show what agents may reach"
 				: (c.role() == null ? "" : c.role() + " in ") + repoName(c.repoId(), s) + ": " + c.caps();
+			case Artifacts a -> a.id() == null ? "open the artifacts" : "open artifact " + a.id();
+			case Notes n -> n.query() == null ? "open " + n.source() : "search " + n.source() + ": " + n.query();
 			case Repos r -> "list repos";
 			case AgentAction a -> a.action() + " " + (a.agentIds().size() == 1 ? displayName(a.agentIds().get(0), s) : a.agentIds().size() + " agents");
 			case TaskAction t -> t.action() + " " + t.taskId();
@@ -759,6 +802,17 @@ public final class ConsoleCommands {
 					for (Repo r : s.repos().values()) {
 						if (r.id().toLowerCase(Locale.ROOT).startsWith(lower)) {
 							out.add(new Completion(ts, cursor, r.id(), r.id(), r.name(), null, null));
+						}
+					}
+				}
+			}
+			case "/artifacts", "/artifact", "/result", "/results" -> {
+				if (argIndex == 1) {
+					for (Protocol.MemoryEntry e : dev.agentcraft.client.library.MemoryIndex.entries(dev.agentcraft.client.library.MemoryIndex.ARTIFACTS)) {
+						String id = e.id().substring(e.id().indexOf('/') + 1);
+						if (id.startsWith(lower)) {
+							String items = dev.agentcraft.client.library.MemoryIndex.itemCount(e);
+							out.add(new Completion(ts, cursor, id, id, items == null ? e.title() : e.title() + " · " + items, null, null));
 						}
 					}
 				}
@@ -964,6 +1018,11 @@ public final class ConsoleCommands {
 				m.put("repoId", f.repoId());
 			}
 			case Permissions p -> m.put("mode", p.mode());
+			case Artifacts a -> m.put("id", a.id());
+			case Notes n -> {
+				m.put("source", n.source());
+				m.put("query", n.query());
+			}
 			case Caps c -> {
 				m.put("repoId", c.repoId());
 				m.put("role", c.role());

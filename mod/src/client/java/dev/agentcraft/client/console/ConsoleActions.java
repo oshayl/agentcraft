@@ -12,7 +12,9 @@ import dev.agentcraft.client.console.ConsoleCommands.Intent;
 import dev.agentcraft.client.console.ConsoleCommands.Invalid;
 import dev.agentcraft.client.console.ConsoleCommands.Message;
 import dev.agentcraft.client.console.ConsoleCommands.RepoAdd;
+import dev.agentcraft.client.console.ConsoleCommands.Artifacts;
 import dev.agentcraft.client.console.ConsoleCommands.Caps;
+import dev.agentcraft.client.console.ConsoleCommands.Notes;
 import dev.agentcraft.client.console.ConsoleCommands.Permissions;
 import dev.agentcraft.client.console.ConsoleCommands.RepoFix;
 import dev.agentcraft.client.console.ConsoleCommands.Repos;
@@ -143,6 +145,21 @@ public final class ConsoleActions {
 				ConsoleLog.add(Tone.INFO, "Decision bell and done chime: " + state + why);
 				clearFeedback();
 				return After.CLEAR;
+			}
+			case Artifacts a -> {
+				ConsoleLog.remember(raw);
+				clearFeedback();
+				// the library already has them (scope "artifacts" in the snapshot): no round trip
+				String id = a.id() == null ? null : a.id().contains("/") ? a.id() : "artifacts/" + a.id();
+				dev.agentcraft.client.library.LibraryFeature.open(dev.agentcraft.client.library.MemoryIndex.ARTIFACTS, id);
+				return After.CLOSE;
+			}
+			case Notes n -> {
+				ConsoleLog.remember(raw);
+				clearFeedback();
+				dev.agentcraft.client.library.FileNotes.search(n.source(), n.query());
+				dev.agentcraft.client.library.LibraryFeature.open(n.source(), null);
+				return After.CLOSE;
 			}
 			case Decide d -> {
 				ConsoleLog.remember(raw);

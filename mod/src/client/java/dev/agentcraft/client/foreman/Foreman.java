@@ -101,6 +101,15 @@ public final class Foreman {
 		return link.send(ForemanJson.msg("caps.set").put("repoId", repoId).put("role", role).put("caps", caps).json());
 	}
 
+	/**
+	 * A read-only markdown folder (config.json {@code library}): the index, or one note with its
+	 * body when {@code noteId} is given. Nothing of these folders is in the snapshot - a vault is
+	 * thousands of notes - so the library asks for what it is about to show.
+	 */
+	public static CompletableFuture<Protocol.Library> requestLibrary(String source, @Nullable String noteId, @Nullable String query, @Nullable Integer limit) {
+		return link.requestLibrary(source, noteId, query, limit);
+	}
+
 	/** Structured diff of a worktree (or an agent id: its current worktree) vs its base. */
 	public static CompletableFuture<Diff> requestDiff(String repoId, String worktree) {
 		return link.requestDiff(repoId, worktree);

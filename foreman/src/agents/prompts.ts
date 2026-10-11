@@ -1,8 +1,9 @@
 // System-prompt appendices and job prompts for the claude backend.
 import { CLOSED, type AgentCapabilities } from '../capabilities.js';
 import type { Foreman } from '../foreman.js';
-import type { Goal, Task, Worktree } from '../protocol.js';
+import type { Goal, MemoryEntry, Task, Worktree } from '../protocol.js';
 import { truncate } from '../util/text.js';
+import { artifactBrief, artifactsNamedIn } from '../artifacts.js';
 import { userName } from '../user.js';
 import { isPrBranch, pullBriefs, type PullRequest } from '../pulls.js';
 
@@ -35,6 +36,7 @@ ${
       : `- Never push, publish or deploy. Code merges only when ${userName()} approves a merge decision.`
   }
 - Review requests: you get the diff and the test result. If the work meets the task, call request_merge(task_id, summary). Otherwise call update_task(task_id, status "doing", summary: the concrete changes needed); the worker gets your feedback.
+- When a goal finishes you get one last turn to write the result with write_artifact: one artifact, the whole team's findings, with every open thing itemised. ${userName()} reopens those in the library and can point a later goal at one ("read a3 and do the open items"), so if an open item is not in there it is lost.
 - Talk to workers with send_message (short). End your turn as soon as the current job is done.
 `.trim();
 }
@@ -90,9 +92,10 @@ For pull requests:
 - If several PRs implement the same thing in competing ways, or a PR is a product-direction call rather than a fix, do not create tasks for them: ask_user once which way to go (recommended option first), and plan only what ${userName()} picks.
 `
     : '';
+  const named = artifactBrief(artifactsNamedIn(goal.text, fm.memory.artifacts()), (id) => fm.memory.pathOf(id));
   return `New goal from ${userName()}:
 "${goal.text}"
-
+${named}
 Repository: ${repoPath} (base branch ${branch}). Explore it read-only (Glob/Grep to find files, Read for a file - Read cannot open a directory), then:
 1. write_memory the plan (title "Plan: ...", scope shared)
 2. create_task for each task (deps + assignee)
@@ -148,6 +151,44 @@ Diff vs base (${stats.files} files, +${stats.additions} -${stats.deletions}):
 ${diffText}
 
 Decide now: request_merge("${task.id}", summary for ${userName()}) if it meets the task, or update_task("${task.id}", status "doing", summary: the concrete changes needed). Then end your turn.`;
+}
+
+/**
+ * The last turn of a goal: the lead reads back everything the team produced and leaves one
+ * artifact behind. Without this the result of a goal is a dozen separate notes - a plan, a
+ * review per worker - that nobody reads again, and the open items each worker found are lost
+ * the moment the goal closes.
+ */
+export function reportPrompt(fm: Foreman, goal: Goal, notes: MemoryEntry[]): string {
+  const tasks = fm.tasks.list().filter((t) => t.goalId === goal.id);
+  const board = tasks.length
+    ? tasks
+        .map((t) => `- ${t.id} [${t.status}] ${t.title}${t.assignee ? ` (${fm.nameOf(t.assignee)})` : ''}${t.summary ? `\n    ${truncate(t.summary.replace(/\s+/g, ' '), 500)}` : ''}`)
+        .join('\n')
+    : '(no tasks)';
+  // the team's own words, not a summary of a summary: this is the material to analyse
+  const written = notes.length
+    ? notes.map((e) => `### ${e.title}\n_by ${e.author ? fm.nameOf(e.author) : 'unknown'}_\n\n${truncate(e.body, 6000)}`).join('\n\n')
+    : '(the team wrote no notes)';
+  return `The goal is finished:
+"${goal.text}"
+
+Write the one thing that outlives it. Read what the team actually produced, below, then call write_artifact ONCE with:
+- title: the subject and the date, e.g. "The Movement: code review, 11 Oct"
+- summary: 3-6 lines. What did the team establish? Where does this leave ${userName()}? Plain words, no restating the task list.
+- open_items: every thing still to do, one line each, as an action ("Rewrite the README routes section to match app/page.tsx"), with evidence (file:line) and the worker who found it. Merge duplicates that two workers found separately. Leave out anything already done. If nothing is open, pass [].
+- done: what is settled - checked and clear, or changed and merged.
+- notes: the detail worth keeping (how something was checked, a caveat, a limit nobody verified).
+
+Judge the work, do not just collect it: say where workers disagree, where a finding is unproven, and what you would do first. Order open_items by what ${userName()} should do first.
+
+Then send_message to "user" with one line: what the artifact is called and how many items are open. Then end your turn. Create no tasks.
+
+## The board
+${board}
+
+## What the team wrote
+${written}`;
 }
 
 export const RESUME_PROMPT =

@@ -1,11 +1,13 @@
 // The AgentCraft team tools, shared by every engine (Claude: an in-process MCP server named
 // "agentcraft", see claude/tools.ts; Codex: app-server dynamic tools, see codex/engine.ts):
 //   send_message, ask_user, write_memory, read_memory, update_task, report_status, list_tasks
-//   lead only: create_task, request_merge
+//   lead only: create_task, request_merge, write_artifact
 // Every tool result carries any unread messages for the agent (so mid-turn messages arrive).
 import { z } from 'zod';
 import { formatInbox } from '../bus.js';
 import type { Foreman } from '../foreman.js';
+import { ARTIFACT_SCOPE } from '../memory.js';
+import { renderArtifact } from '../artifacts.js';
 import type { AgentState, Decision, TaskStatus } from '../protocol.js';
 import { MERGE_OPTIONS } from '../protocol.js';
 import { isPrBranch } from '../pulls.js';
@@ -47,7 +49,7 @@ export interface AgentTool {
 /** Names of the team tools for a role (unprefixed). */
 export const TOOL_NAMES = {
   common: ['send_message', 'ask_user', 'write_memory', 'read_memory', 'update_task', 'report_status', 'list_tasks'],
-  lead: ['create_task', 'request_merge'],
+  lead: ['create_task', 'request_merge', 'write_artifact'],
 } as const;
 
 function tool<S extends z.ZodRawShape>(name: string, description: string, shape: S, handler: (args: z.infer<z.ZodObject<S>>) => Promise<ToolResult>): AgentTool {
@@ -164,8 +166,8 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
       { id: z.string().optional(), query: z.string().optional() },
       async ({ id, query }) => {
         if (id) {
-          const e = fm.memory.get(id) ?? fm.memory.get(`shared/${id}`) ?? fm.memory.get(`${agentId}/${id}`);
-          if (!e || (e.scope !== 'shared' && e.scope !== agentId)) return fail(`no memory ${id}`);
+          const e = fm.memory.get(id) ?? fm.memory.get(`shared/${id}`) ?? fm.memory.get(`${ARTIFACT_SCOPE}/${id}`) ?? fm.memory.get(`${agentId}/${id}`);
+          if (!e || (e.scope !== 'shared' && e.scope !== ARTIFACT_SCOPE && e.scope !== agentId)) return fail(`no memory ${id}`);
           return withInbox(`# ${e.title} (${e.id})\n\n${e.body}`);
         }
         const list = query ? fm.memory.search(query, agentId) : fm.memory.visibleTo(agentId);
@@ -236,6 +238,36 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
 
   if (role === 'lead') {
     tools.push(
+      tool(
+        'write_artifact',
+        `Save the team's result as an artifact: one durable, itemised note ${userName()} can reopen, and a later goal can be pointed at ("read <id> and do the open items"). Write one when a goal finishes, summarising what the whole team established - not one per task. Pass id to update an existing artifact instead of adding another.`,
+        {
+          title: z.string().describe('what this is about, e.g. "The Movement: code review, 11 Oct"'),
+          summary: z.string().describe('3-6 lines: what the team established, in plain words'),
+          open_items: z
+            .array(
+              z.object({
+                text: z.string().describe('one line, an action: "Rewrite README routes section to match app/page.tsx"'),
+                evidence: z.string().optional().describe('where it was found: "README:37, app/page.tsx:14"'),
+                owner: z.string().optional().describe('the agent who found it'),
+              }),
+            )
+            .describe('everything still to do, one entry each; [] when nothing is open'),
+          done: z.array(z.string()).optional().describe('what is settled: checked and clear, or already changed'),
+          notes: z.string().optional().describe('markdown appended under Notes (detail, caveats, how it was checked)'),
+          id: z.string().optional().describe('an existing artifact id to replace'),
+          goal_id: z.string().optional(),
+        },
+        async ({ title, summary, open_items, done, notes, id, goal_id }) => {
+          const goal = goal_id ? fm.goal(goal_id) : fm.currentGoal();
+          const body = renderArtifact({ title, summary, openItems: open_items, done: done ?? [], ...(notes ? { notes } : {}), ...(goal ? { goal } : {}) });
+          const slug = id ? id.replace(`${ARTIFACT_SCOPE}/`, '') : undefined;
+          const e = fm.memory.write({ scope: ARTIFACT_SCOPE, title, body, author: agentId, ...(slug ? { slug } : {}) });
+          const open = open_items.length;
+          fm.bus.feed('memory', `${fm.nameOf(agentId)} saved artifact ${e.id}: ${e.title} (${open} open item${open === 1 ? '' : 's'})`, { agentId });
+          return withInbox(`Saved artifact ${e.id} (${open} open item${open === 1 ? '' : 's'}) at ${fm.memory.pathOf(e.id)}. ${userName()} can reopen it in the library, and a later goal can name it.`);
+        },
+      ),
       tool(
         'create_task',
         'Create a task for a worker. deps = task ids that must be merged first. Returns the new task id.',

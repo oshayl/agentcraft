@@ -92,7 +92,8 @@ public final class LibraryScreen extends Screen {
 
 	private void refresh() {
 		ForemanState s = Foreman.state();
-		long rev = s == null ? 0 : s.revision();
+		// a file source arrives asynchronously, so its own revision counts as a change too
+		long rev = (s == null ? 0 : s.revision()) * 1_000_003L + FileNotes.revision();
 		if (rev == seenRevision) {
 			return;
 		}
@@ -131,6 +132,11 @@ public final class LibraryScreen extends Screen {
 		return -1;
 	}
 
+	/** A note's text: in the snapshot for memory, fetched on first look for a file source. */
+	private String bodyOf(MemoryEntry e) {
+		return FileNotes.isSource(e.scope()) ? FileNotes.body(e) : e.body();
+	}
+
 	private void ensureBody() {
 		MemoryEntry e = selected();
 		if (e == null) {
@@ -143,12 +149,13 @@ public final class LibraryScreen extends Screen {
 		if (Foreman.state() != null) {
 			taskIds.addAll(Foreman.state().tasks().keySet());
 		}
-		String key = e.id() + "@" + e.updated() + "#" + textW + ":" + taskIds.size();
+		String text = bodyOf(e);
+		String key = e.id() + "@" + e.updated() + "#" + textW + ":" + taskIds.size() + ":" + text.length();
 		if (key.equals(bodyKey)) {
 			return;
 		}
 		boolean sameEntry = bodyKey != null && bodyKey.startsWith(e.id() + "@");
-		List<Markdown.Block> blocks = Markdown.parse(e.body());
+		List<Markdown.Block> blocks = Markdown.parse(text.isEmpty() && FileNotes.isSource(e.scope()) ? "_Reading..._" : text);
 		// the first heading usually repeats the title: the reader shows the title already
 		if (!blocks.isEmpty() && blocks.get(0).type == Markdown.Type.H1 && norm(Markdown.plain(blocks.get(0).text)).equals(norm(e.title()))) {
 			blocks = blocks.subList(1, blocks.size());
@@ -164,6 +171,9 @@ public final class LibraryScreen extends Screen {
 
 	/** First line of prose of an entry (headings skipped), plain text, for the list. */
 	private String excerpt(MemoryEntry e) {
+		if (FileNotes.isSource(e.scope()) && e.body().isEmpty() && !FileNotes.hasBody(e)) {
+			return FileNotes.folderOf(e);
+		}
 		return excerpts.computeIfAbsent(e.id() + "@" + e.updated(), k -> {
 			for (Markdown.Block b : Markdown.parse(e.body())) {
 				switch (b.type) {
@@ -341,7 +351,12 @@ public final class LibraryScreen extends Screen {
 		listScroll = Math.max(0, Math.min(listScroll, Math.max(0, content - h)));
 		int muted = ReviewKit.muted();
 		if (entries.isEmpty()) {
-			String m = scope.isEmpty() ? "No notes yet" : "No notes in this scope";
+			String err = FileNotes.isSource(scope) ? FileNotes.error(scope) : null;
+			String q = FileNotes.isSource(scope) ? FileNotes.query(scope) : null;
+			String m = err != null ? err
+				: FileNotes.loading(scope) ? "Reading " + MemoryIndex.scopeLabel(scope) + "..."
+				: q != null ? "Nothing matching \"" + q + "\""
+				: scope.isEmpty() ? "No notes yet" : "No notes in this scope";
 			g.text(font, m, x + 6, top + 8, muted, false);
 			return;
 		}
@@ -374,6 +389,10 @@ public final class LibraryScreen extends Screen {
 				int cw = ReviewKit.chip(g, font, "PLAN", tx, y + 3, ReviewKit.mix(UiStyle.color("palette.ui.panel"), UiStyle.BRASS, 0.32f), UiStyle.color(
 					"paper.path"));
 				tx += cw + 4;
+			} else if (MemoryIndex.isArtifact(e)) {
+				int cw = ReviewKit.chip(g, font, "RESULT", tx, y + 3, ReviewKit.mix(UiStyle.color("palette.ui.panel"), UiStyle.CLAY, 0.28f), UiStyle.color(
+					"paper.link"));
+				tx += cw + 4;
 			}
 			g.text(font, TextUtil.ellipsize(font, e.title(), right - tx), tx, y + 5, ReviewKit.ink(), false);
 			// author face + name · scope · age
@@ -389,7 +408,8 @@ public final class LibraryScreen extends Screen {
 			}
 			StringBuilder meta = new StringBuilder();
 			if (scope.isEmpty()) {
-				meta.append(author != null ? " · " : "").append(e.scope().equals("shared") ? "shared" : "private");
+				meta.append(author != null ? " · " : "").append(e.scope().equals("shared") ? "shared" : MemoryIndex.isArtifact(e) ? "artifact"
+					: FileNotes.isSource(e.scope()) ? MemoryIndex.scopeLabel(e.scope()) : "private");
 			}
 			String age = ReviewKit.ago(e.updated());
 			if (!age.isEmpty()) {
@@ -434,7 +454,12 @@ public final class LibraryScreen extends Screen {
 		int ty = y + 8;
 		String title = e.title();
 		int titleW = textW;
-		String scopeText = e.scope().equals("shared") ? "shared" : "private to " + ReviewKit.agentName(e.scope());
+		String items = MemoryIndex.isArtifact(e) ? MemoryIndex.itemCount(e) : null;
+		String folder = FileNotes.isSource(e.scope()) ? FileNotes.folderOf(e) : "";
+		String scopeText = e.scope().equals("shared") ? "shared"
+			: MemoryIndex.isArtifact(e) ? "artifact" + (items == null ? "" : " · " + items)
+			: FileNotes.isSource(e.scope()) ? MemoryIndex.scopeLabel(e.scope()) + (folder.isEmpty() ? "" : " · " + folder)
+			: "private to " + ReviewKit.agentName(e.scope());
 		ReviewKit.bold(g, font, TextUtil.ellipsize(font, title, titleW), tx, ty, ReviewKit.ink());
 		int my0 = ty + 13;
 		int ax = tx;

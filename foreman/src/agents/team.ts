@@ -27,6 +27,7 @@ import type { ClaudeConfig } from '../config.js';
 import { FOREMAN_VERSION } from '../config.js';
 import { ClientError, type Backend, type Foreman } from '../foreman.js';
 import { withGitSafety } from '../gitsafety.js';
+import { artifactBrief, artifactsNamedIn } from '../artifacts.js';
 import { describeCapabilities, resolveCapabilities, withRepoCapabilities, type AgentCapabilities, type CapabilityConfig } from '../capabilities.js';
 import { agentGitIdentity } from '../util/git.js';
 import { classifyToolUse, describeRuleKey, describeToolCall } from '../policy.js';
@@ -37,17 +38,17 @@ import { renderDiffText } from '../diff.js';
 import { formatInbox } from '../bus.js';
 import { descendantsOf, killSnapshot, killTree, orphansOf, processTable, type ProcEntry } from '../util/proc.js';
 import { truncate } from '../util/text.js';
-import { leadSystemPrompt, planPrompt, RESUME_PROMPT, reviewPrompt, workerSystemPrompt, workPrompt } from './prompts.js';
+import { leadSystemPrompt, planPrompt, reportPrompt, RESUME_PROMPT, reviewPrompt, workerSystemPrompt, workPrompt } from './prompts.js';
 import { fetchPulls, githubOrigin, prRefs, pullBriefs, type PullRequest } from '../pulls.js';
 import type { Engine, EngineId, PermissionGate, Role, TurnStats } from './engine.js';
-import { agentTools, type ToolHooks, type TurnHandle } from './tools.js';
+import { agentTools, TOOL_NAMES, type ToolHooks, type TurnHandle } from './tools.js';
 import { modelLabel } from './models.js';
 import { userName } from '../user.js';
 
 // policy: our own team tools are trusted (the Claude engine exposes them as this MCP server)
 const TEAM_MCP_SERVER = 'agentcraft';
 
-type JobKind = 'plan' | 'work' | 'review' | 'followup';
+type JobKind = 'plan' | 'work' | 'review' | 'followup' | 'report';
 type AbortReason = 'pause' | 'stop' | 'shutdown' | 'cancel' | 'timeout';
 
 interface Job {
@@ -100,6 +101,14 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function alive(child: ChildProcess | undefined): child is ChildProcess {
   return !!child && child.exitCode === null && child.signalCode === null;
+}
+
+/**
+ * The team tools a role gets, as one string. Part of a session's fingerprint: see
+ * SessionRecord.tools. Built from the names rather than the built tools, so it costs nothing.
+ */
+function toolFingerprint(role: Role): string {
+  return [...TOOL_NAMES.common, ...(role === 'lead' ? TOOL_NAMES.lead : [])].slice().sort().join(',');
 }
 
 const TURN_TIMEOUT_MS = 45 * 60_000;
@@ -168,6 +177,8 @@ export class TeamBackend implements Backend {
   private authFailed = false;
   private stopping = false;
   private waitingUser = new Set<string>();
+  /** goals whose artifact turn has been queued (a goal can complete more than once) */
+  private reported = new Set<string>();
   private hooks: ToolHooks;
   private lastCost = new Map<string, number>();
   private turnPromises = new Set<Promise<void>>();
@@ -726,7 +737,7 @@ export class TeamBackend implements Backend {
       const verdict = classifyToolUse(toolName, input, {
         role,
         cwd,
-        readDirs: [this.fm.memory.dir],
+        readDirs: [this.fm.memory.dir, ...this.fm.library.roots()],
         alwaysAllow: this.fm.store.data.permissionRules[agentId] ?? [],
         mcpServer: TEAM_MCP_SERVER,
         leadReadCommands: this.cfg.leadReadCommands,
@@ -851,14 +862,19 @@ export class TeamBackend implements Backend {
       const session = this.fm.store.data.sessions[job.sessionKey];
       // a session belongs to the engine that made it (records from before engines were Claude's)
       const caps = describeCapabilities(capabilities);
+      const toolset = toolFingerprint(role);
       // Capabilities changed since this thread started: its history still holds the old rules,
       // so resuming would keep the agent believing them. Start a new thread instead.
       // An exact match only. A session recorded before capabilities existed has no fingerprint,
       // and its thread history holds whatever rules applied then, so it must not be resumed
       // either: "unknown" is a mismatch, not a match.
       const sameCaps = session?.caps === caps;
-      const resume = !job.fresh && session?.sessionId && (session.engine ?? 'claude') === engine.id && sameCaps ? session.sessionId : undefined;
+      // Same reasoning for the tool list: a resumed thread answers with the tools it was created
+      // with, so an agent on an old thread simply reports a new tool as not available to it.
+      const sameTools = session?.tools === toolset;
+      const resume = !job.fresh && session?.sessionId && (session.engine ?? 'claude') === engine.id && sameCaps && sameTools ? session.sessionId : undefined;
       if (session?.sessionId && !sameCaps) this.fm.log.info(`${agentId}: capabilities changed (${session.caps} -> ${caps}); starting a fresh thread`);
+      else if (session?.sessionId && !sameTools) this.fm.log.info(`${agentId}: team tools changed since this thread started; starting a fresh one`);
       this.st.inflight[agentId] = { kind: job.kind, sessionKey: job.sessionKey, startedAt: Date.now(), ...(job.taskId ? { taskId: job.taskId } : {}), ...(job.goalId ? { goalId: job.goalId } : {}) };
       this.fm.store.markDirty();
 
@@ -897,7 +913,7 @@ export class TeamBackend implements Backend {
             entry.spawnedAt = Date.now();
           },
           onSession: (id) => {
-            if (this.fm.store.data.sessions[job.sessionKey]?.sessionId !== id) this.recordSession(job.sessionKey, id, model, engine.id, undefined, caps);
+            if (this.fm.store.data.sessions[job.sessionKey]?.sessionId !== id) this.recordSession(job.sessionKey, id, model, engine.id, undefined, caps, toolset);
           },
           onModel: (m) => {
             const label = modelLabel(m);
@@ -909,7 +925,7 @@ export class TeamBackend implements Backend {
       } finally {
         clearTimeout(timer);
       }
-      if (stats.sessionId) this.recordSession(job.sessionKey, stats.sessionId, model, engine.id, stats, caps);
+      if (stats.sessionId) this.recordSession(job.sessionKey, stats.sessionId, model, engine.id, stats, caps, toolset);
       if (stats.authFailed) this.markAuthFailed(engine.authFailedMessage(stats.authFailed));
     } catch (e) {
       const aborted = abort.signal.aborted;
@@ -969,12 +985,13 @@ export class TeamBackend implements Backend {
     this.onUserMessage(agentId, fromUser[fromUser.length - 1]!.text);
   }
 
-  private recordSession(key: string, sessionId: string, model: string, engine: EngineId, stats?: TurnStats, caps?: string): void {
+  private recordSession(key: string, sessionId: string, model: string, engine: EngineId, stats?: TurnStats, caps?: string, tools?: string): void {
     const s = (this.fm.store.data.sessions[key] ??= { turns: 0, costUsd: 0, updatedAt: Date.now() });
     s.sessionId = sessionId;
     s.model = model;
     s.engine = engine;
     if (caps !== undefined) s.caps = caps;
+    if (tools !== undefined) s.tools = tools;
     s.updatedAt = Date.now();
     if (stats) {
       s.turns += stats.numTurns ?? 0;
@@ -1177,7 +1194,8 @@ export class TeamBackend implements Backend {
     const mine = this.fm.bus.inbox(id).filter((m) => m.from === 'user' && (m.to === id || (to === 'all' && m.to === 'all')));
     const body = mine.length ? mine.map((m) => m.text).join('\n\n') : text;
     const consume = () => this.fm.bus.markRead(id, mine.map((m) => m.id));
-    const prompt = `Message from ${userName()}: ${body}\n\n${note ? `${note}\n\n` : ''}Respond briefly with send_message(to "user") and act on it if needed (lead: create or update tasks; worker: adjust your work).`;
+    const named = artifactBrief(artifactsNamedIn(body, this.fm.memory.artifacts()), (mid) => this.fm.memory.pathOf(mid));
+    const prompt = `Message from ${userName()}: ${body}\n${named}\n${note ? `${note}\n\n` : ''}Respond briefly with send_message(to "user") and act on it if needed (lead: create or update tasks; worker: adjust your work).`;
     if (id === LEAD) {
       const goal = this.fm.currentGoal();
       if (!goal) {
@@ -1203,6 +1221,24 @@ export class TeamBackend implements Backend {
       return;
     }
     this.enqueue({ kind: 'followup', agentId: id, taskId: t.id, ...(t.goalId ? { goalId: t.goalId } : {}), sessionKey: `${id}:${t.id}`, prompt });
+  }
+
+  /**
+   * The goal is done: the lead gets one more turn to leave an artifact behind (prompts.ts,
+   * reportPrompt). On the goal's own session key, so it still has the plan and the reviews in
+   * its thread. Skipped when the goal produced nothing to report on.
+   */
+  onGoalComplete(goal: Goal): void {
+    if (this.isStopped(LEAD) || this.stopping) return;
+    const tasks = this.fm.tasks.list().filter((t) => t.goalId === goal.id && t.status !== 'cancelled');
+    if (!tasks.length) return;
+    const sessionKey = `${LEAD}:${goal.id}`;
+    if (this.reported.has(goal.id)) return;
+    this.reported.add(goal.id);
+    // everything the team wrote while this goal ran: the plan, and every worker's review note
+    const notes = this.fm.memory.list().filter((e) => e.scope === 'shared' && e.updated >= goal.createdAt);
+    this.enqueue({ kind: 'report', agentId: LEAD, goalId: goal.id, sessionKey, prompt: reportPrompt(this.fm, goal, notes) });
+    this.fm.agentLog(LEAD, 'text', `Goal ${goal.id} finished: writing the artifact`);
   }
 
   onDecisionSettled(d: Decision): void {

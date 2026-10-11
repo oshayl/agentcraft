@@ -227,6 +227,10 @@ export const ForemanStatus = z.object({
   permissionMode: PermissionMode.optional().describe(
     "'ask' (default) prompts for every ask-verdict; 'auto' allows them without asking. Hard denials are refused in both, and merges always wait for the user.",
   ),
+  libraries: z
+    .array(z.object({ id: Id, label: z.string() }))
+    .optional()
+    .describe('read-only markdown folders this Foreman can serve (config.json `library`), browsable with `library.request`'),
 });
 export type ForemanStatus = z.infer<typeof ForemanStatus>;
 
@@ -300,6 +304,26 @@ export const TaskUpsertMsg = z.object({ ...envelope('task.upsert'), task: Task }
 export const DecisionUpsertMsg = z.object({ ...envelope('decision.upsert'), decision: Decision });
 export const RepoUpsertMsg = z.object({ ...envelope('repo.upsert'), repo: Repo });
 export const MemoryUpsertMsg = z.object({ ...envelope('memory.upsert'), entry: MemoryEntry });
+
+export const LibraryItem = z.object({
+  id: z.string().describe("path inside the library, e.g. \"10 Projects/AgentCraft.md\""),
+  title: z.string().describe('the first heading, or the file name'),
+  folder: z.string().describe('the containing folder, "" at the top'),
+  updated: Ts,
+  size: z.number().int().describe('bytes'),
+  body: z.string().optional().describe('only in the answer to a request for one note'),
+});
+export type LibraryItem = z.infer<typeof LibraryItem>;
+
+export const LibraryMsg = z.object({
+  ...envelope('library'),
+  requestId: z.string(),
+  source: Id,
+  items: z.array(LibraryItem).describe('the index, or the one requested note'),
+  total: z.number().int().optional().describe('matches before the limit was applied'),
+  truncated: z.boolean().optional().describe('the folder was too large to index in full'),
+  error: z.string().optional(),
+});
 export const GoalUpsertMsg = z.object({ ...envelope('goal.upsert'), goal: Goal });
 export const FeedAddMsg = z.object({ ...envelope('feed.add'), item: FeedItem });
 export const DiffMsg = z.object({
@@ -344,6 +368,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   DecisionUpsertMsg,
   RepoUpsertMsg,
   MemoryUpsertMsg,
+  LibraryMsg,
   GoalUpsertMsg,
   FeedAddMsg,
   DiffMsg,
@@ -419,6 +444,19 @@ export const PermissionModeSetMsg = z.object({
   ...envelope('permissions.set'),
   mode: PermissionMode.optional().describe('omitted = cycle to the next mode'),
 });
+export const LibraryRequestMsg = z.object({
+  ...envelope('library.request'),
+  requestId: z.string().min(1),
+  source: Id.describe('a library id from `status.libraries`, e.g. "vault"'),
+  note: z
+    .string()
+    .max(1024)
+    .optional()
+    .describe("a note's path inside the library: answered with that note's text. Omitted = the index (titles and paths, no bodies)"),
+  query: z.string().max(200).optional().describe('index only: every word must appear in the title or the path'),
+  limit: z.number().int().min(1).max(1000).optional().describe('index only: how many notes to return (default 150, newest first)'),
+});
+
 export const CapsSetMsg = z.object({
   ...envelope('caps.set'),
   repoId: Id.optional().describe('the repo whose agents this changes; omitted = report every repo and change nothing'),
@@ -444,6 +482,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   RepoFixMsg,
   PermissionModeSetMsg,
   CapsSetMsg,
+  LibraryRequestMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -499,6 +538,10 @@ export const SERVER_MESSAGES = {
   'decision.upsert': { schema: DecisionUpsertMsg, doc: 'Decision opened, answered or cancelled. Replace by `decision.id`.' },
   'repo.upsert': { schema: RepoUpsertMsg, doc: 'Repo added or changed (worktrees, CI, head, dirty). Replace by `repo.id`.' },
   'memory.upsert': { schema: MemoryUpsertMsg, doc: 'Memory entry written. Replace by `entry.id`.' },
+  library: {
+    schema: LibraryMsg,
+    doc: 'Answer to `library.request`: the index of a read-only markdown folder (an Obsidian vault, a docs directory), or one note with its `body`. Never sent unasked: a real vault is thousands of notes, so nothing ships in the snapshot.',
+  },
   'goal.upsert': { schema: GoalUpsertMsg, doc: 'Goal created or progress/status changed. Replace by `goal.id`; latest goal is current.' },
   'feed.add': { schema: FeedAddMsg, doc: 'Append to the activity feed.' },
   diff: { schema: DiffMsg, doc: 'Reply to `diff.request` (sent only to the requesting client). Structured unified diff of worktree vs base, including uncommitted changes.' },
@@ -520,6 +563,10 @@ export const CLIENT_MESSAGES = {
   'permissions.set': {
     schema: PermissionModeSetMsg,
     doc: 'Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-game key). Never affects hard denials or merges.',
+  },
+  'library.request': {
+    schema: LibraryRequestMsg,
+    doc: 'Browse a read-only markdown folder configured as a library (config.json `library`): the index, or one note. Answered with `library` to the asking client only.',
   },
   'caps.set': {
     schema: CapsSetMsg,

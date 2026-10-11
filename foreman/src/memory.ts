@@ -1,7 +1,14 @@
-// Memory: markdown files, shared + per-agent, under <profile>/memory.
+// Memory: markdown files, shared + per-agent + artifacts, under <profile>/memory.
 //
 //   memory/shared/<slug>.md
 //   memory/agents/<agentId>/<slug>.md
+//   memory/artifacts/<slug>.md
+//
+// Artifacts are the team's durable output rather than its scratch notes: one per finished goal,
+// written by the lead (write_artifact, see agents/tools.ts) with an itemised list of what is
+// still open. Everyone can read them, the user can open the file in any editor, and a later goal
+// can name one ("read a3 and do the open items"), which is why they have their own scope: they
+// outlive the goal that produced them, and the library shows them under their own tab.
 //
 // Each file starts with a tiny front matter block (title/author/updated). Files the user drops in
 // or edits by hand are picked up too (title falls back to the first heading or the file name).
@@ -13,6 +20,9 @@ import { ensureDir, writeFileAtomic } from './util/fsx.js';
 import { slugify } from './util/text.js';
 
 export class MemoryError extends Error {}
+
+/** The memory scope holding artifacts (see the header). */
+export const ARTIFACT_SCOPE = 'artifacts';
 
 interface Parsed {
   title?: string;
@@ -58,12 +68,15 @@ export class Memory {
     this.dir = ensureDir(dir);
     ensureDir(path.join(this.dir, 'shared'));
     ensureDir(path.join(this.dir, 'agents'));
+    ensureDir(path.join(this.dir, ARTIFACT_SCOPE));
     this.reload();
   }
 
   private fileFor(id: string): string {
     const [scope, slug] = this.splitId(id);
-    return scope === 'shared' ? path.join(this.dir, 'shared', `${slug}.md`) : path.join(this.dir, 'agents', scope, `${slug}.md`);
+    if (scope === 'shared') return path.join(this.dir, 'shared', `${slug}.md`);
+    if (scope === ARTIFACT_SCOPE) return path.join(this.dir, ARTIFACT_SCOPE, `${slug}.md`);
+    return path.join(this.dir, 'agents', scope, `${slug}.md`);
   }
 
   private splitId(id: string): [string, string] {
@@ -99,6 +112,7 @@ export class Memory {
       }
     };
     load('shared', path.join(this.dir, 'shared'));
+    load(ARTIFACT_SCOPE, path.join(this.dir, ARTIFACT_SCOPE));
     const agentsDir = path.join(this.dir, 'agents');
     for (const a of fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir) : []) {
       if (/^[a-z0-9_-]+$/i.test(a)) load(a, path.join(agentsDir, a));
@@ -113,9 +127,19 @@ export class Memory {
     return this.entries.get(id);
   }
 
-  /** Entries visible to an agent: shared + its own. */
+  /** Shared notes, this agent's own private ones, and every artifact (those are for everyone). */
   visibleTo(agentId: string): MemoryEntry[] {
-    return this.list().filter((e) => e.scope === 'shared' || e.scope === agentId);
+    return this.list().filter((e) => e.scope === 'shared' || e.scope === ARTIFACT_SCOPE || e.scope === agentId);
+  }
+
+  /** The artifacts, newest first: the team's durable output, one per finished goal. */
+  artifacts(): MemoryEntry[] {
+    return this.list().filter((e) => e.scope === ARTIFACT_SCOPE).reverse();
+  }
+
+  /** The file an entry is stored in, for telling an agent (or the user) where to read it. */
+  pathOf(id: string): string {
+    return this.fileFor(id);
   }
 
   search(query: string, agentId?: string): MemoryEntry[] {

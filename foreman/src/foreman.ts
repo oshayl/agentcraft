@@ -10,6 +10,7 @@ import type { Config } from './config.js';
 import { capsFrom, FOREMAN_VERSION } from './config.js';
 import { consoleLogger, type Ctx, type Logger } from './context.js';
 import { DecisionError, DecisionQueue, type CreateDecisionInput } from './decisions.js';
+import { FileLibrary, LibraryError } from './filelibrary.js';
 import { Memory, MemoryError } from './memory.js';
 import { Notifier } from './notifier.js';
 import type {
@@ -50,6 +51,8 @@ export interface Backend {
   onMergeConflict?(task: Task, info: { base: string; branch: string; files: string[]; reason: string }): boolean;
   onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize', arg?: string): void;
   onAgentAction(agentId: string, action: 'pause' | 'resume' | 'stop' | 'spawn', arg?: string): Promise<void> | void;
+  /** Every task of a goal is done: the lead's last turn on it (the artifact), if the backend wants one. */
+  onGoalComplete?(goal: Goal): void;
   /** How far this repository's lead and workers may reach right now (see capabilities.ts). */
   capabilitiesFor?(repoId: string): { lead: AgentCapabilities; worker: AgentCapabilities };
 }
@@ -74,6 +77,8 @@ export class Foreman {
   readonly tasks: TaskGraph;
   readonly bus: MessageBus;
   readonly memory: Memory;
+  /** read-only markdown folders (an Obsidian vault, docs) the user browses in game */
+  readonly library: FileLibrary;
   readonly decisions: DecisionQueue;
   readonly repos: RepoManager;
   readonly notifier: Notifier;
@@ -97,6 +102,7 @@ export class Foreman {
     this.tasks = new TaskGraph(this.ctx);
     this.bus = new MessageBus(this.ctx);
     this.memory = new Memory(this.ctx, path.join(opts.config.dataDir, 'memory'));
+    this.library = new FileLibrary(opts.config.library);
     this.decisions = new DecisionQueue(this.ctx);
     this.repos = new RepoManager(this.ctx, path.join(opts.config.dataDir, 'worktrees'), { mergeStyle: opts.config.mergeStyle, signMerges: opts.config.signMerges });
     this.notifier =
@@ -108,6 +114,8 @@ export class Foreman {
     setUserName(opts.config.userName);
     this.status = { version: FOREMAN_VERSION, backend: opts.config.backend, auth: opts.config.backend === 'sim' ? 'ok' : 'unknown', userName: userName() };
     this.status.permissionMode = this.store.data.permissionMode ?? 'ask';
+    const libs = this.library.sources();
+    if (libs.length) this.status.libraries = libs.map((l) => ({ id: l.id, label: l.label }));
     if (opts.config.backend === 'sim') this.status.message = 'Simulated team (sim backend)';
     this.initRoster();
     this.decisions.onCreated((d) => this.onDecisionCreated(d));
@@ -340,6 +348,7 @@ export class Foreman {
       if (complete && !wasDone) {
         this.bus.feed('goal', `Goal complete: ${g.text}`);
         this.notify('info', `Goal complete: ${truncate(g.text, 80)}`);
+        this.backend?.onGoalComplete?.(this.goal(goalId) ?? g);
       }
     });
   }
@@ -572,7 +581,7 @@ export class Foreman {
       const result = await this.dispatch(msg, reply);
       ack(true, result ? { result } : {});
     } catch (e) {
-      const known = e instanceof ClientError || e instanceof TaskError || e instanceof RepoError || e instanceof DecisionError || e instanceof MemoryError;
+      const known = e instanceof ClientError || e instanceof TaskError || e instanceof RepoError || e instanceof DecisionError || e instanceof MemoryError || e instanceof LibraryError;
       const message = known ? (e as Error).message : `internal error: ${(e as Error).message}`;
       if (!known) this.log.error(`${msg.type}: ${(e as Error).stack ?? e}`);
       reply({ type: 'error', message, ...(msg.id ? { re: msg.id } : {}) });
@@ -621,6 +630,18 @@ export class Foreman {
         const mode = msg.mode ?? (this.permissionMode() === 'ask' ? 'auto' : 'ask');
         this.setPermissionMode(mode);
         return { mode };
+      }
+      case 'library.request': {
+        // answered to the asking client only, like a diff: an index can be thousands of rows
+        try {
+          const r = msg.note
+            ? { items: [this.library.read(msg.source, msg.note)], total: 1, truncated: false }
+            : this.library.list(msg.source, { ...(msg.query ? { query: msg.query } : {}), ...(msg.limit ? { limit: msg.limit } : {}) });
+          reply({ type: 'library', requestId: msg.requestId, source: msg.source, items: r.items, total: r.total, truncated: r.truncated });
+        } catch (e) {
+          reply({ type: 'library', requestId: msg.requestId, source: msg.source, items: [], error: (e as Error).message });
+        }
+        return undefined;
       }
       case 'caps.set': {
         const repos = msg.repoId ? [this.repos.require(msg.repoId)] : this.repos.list();

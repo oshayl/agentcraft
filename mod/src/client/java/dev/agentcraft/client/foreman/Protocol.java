@@ -195,6 +195,29 @@ public final class Protocol {
 		}
 	}
 
+	/** One note in a read-only markdown folder (config.json {@code library}); body only when asked for. */
+	public record LibraryItem(String id, String title, String folder, long updated, int size, @Nullable String body) {
+		public LibraryItem {
+			title = title == null ? id : title;
+			folder = folder == null ? "" : folder;
+		}
+	}
+
+	/** Answer to {@code library.request}: an index, or one note with its body. */
+	public record Library(@Nullable String requestId, String source, List<LibraryItem> items, @Nullable Integer total, @Nullable Boolean truncated,
+		@Nullable String error) {
+		public Library {
+			items = items == null ? List.of() : List.copyOf(items);
+		}
+	}
+
+	/** A readable folder this Foreman serves. */
+	public record LibrarySource(String id, String label) {
+		public LibrarySource {
+			label = label == null ? id : label;
+		}
+	}
+
 	public record Goal(String id, String text, double progress, GoalStatus status, @Nullable String repoId, long createdAt, long updatedAt) {
 		public Goal {
 			text = text == null ? "" : text;
@@ -211,7 +234,12 @@ public final class Protocol {
 
 	public record ForemanStatus(String version, BackendName backend, AuthStatus auth, @Nullable String message, @Nullable String account,
 		@Nullable Double speed, @Nullable Boolean showcase, @Nullable Double costUsd, @Nullable String userName,
-		@Nullable String permissionMode) {
+		@Nullable String permissionMode, @Nullable List<LibrarySource> libraries) {
+		/** The read-only folders that can be browsed in the library (empty when none is configured). */
+		public List<LibrarySource> sources() {
+			return libraries == null ? List.of() : libraries;
+		}
+
 		/** True while permission prompts are being allowed without asking. */
 		public boolean permissionsAuto() {
 			return "auto".equals(permissionMode);

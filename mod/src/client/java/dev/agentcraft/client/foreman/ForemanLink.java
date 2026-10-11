@@ -59,6 +59,7 @@ public final class ForemanLink {
 	private final AtomicLong ids = new AtomicLong();
 	private final Map<String, CompletableFuture<Ack>> pendingAcks = new ConcurrentHashMap<>();
 	private final Map<String, CompletableFuture<Diff>> pendingDiffs = new ConcurrentHashMap<>();
+	private final Map<String, CompletableFuture<Protocol.Library>> pendingLibrary = new ConcurrentHashMap<>();
 	private final java.util.List<Consumer<Diff>> diffListeners = new CopyOnWriteArrayList<>();
 
 	private volatile @Nullable WebSocket ws;
@@ -342,6 +343,13 @@ public final class ForemanLink {
 						f.complete(ack);
 					}
 				}
+				case "library" -> {
+					Protocol.Library lib = ForemanJson.read(json, Protocol.Library.class);
+					CompletableFuture<Protocol.Library> f = lib.requestId() == null ? null : pendingLibrary.remove(lib.requestId());
+					if (f != null) {
+						f.complete(lib);
+					}
+				}
 				case "diff" -> {
 					Diff diff = ForemanJson.read(json, Diff.class);
 					CompletableFuture<Diff> f = diff.requestId() == null ? null : pendingDiffs.remove(diff.requestId());
@@ -432,6 +440,27 @@ public final class ForemanLink {
 					raw.completeExceptionally(err);
 				} else if (!ack.ok()) {
 					raw.completeExceptionally(new IllegalStateException(ack.error() != null ? ack.error() : "diff.request refused"));
+				}
+			});
+		return onClientThread(raw);
+	}
+
+	/**
+	 * {@code library.request}: the index of a read-only folder, or one note with its body
+	 * ({@code noteId} non-null). Completes on the client thread; check {@code error()}.
+	 */
+	public CompletableFuture<Protocol.Library> requestLibrary(String source, @Nullable String noteId, @Nullable String query, @Nullable Integer limit) {
+		String requestId = "mcl-" + ids.incrementAndGet();
+		CompletableFuture<Protocol.Library> raw = new CompletableFuture<>();
+		pendingLibrary.put(requestId, raw);
+		raw.orTimeout(ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS).whenComplete((d, e) -> pendingLibrary.remove(requestId));
+		send(ForemanJson.msg("library.request").put("requestId", requestId).put("source", source).put("note", noteId).put("query", query)
+			.put("limit", limit == null ? null : String.valueOf(limit)).json())
+			.whenComplete((ack, err) -> {
+				if (err != null) {
+					raw.completeExceptionally(err);
+				} else if (!ack.ok()) {
+					raw.completeExceptionally(new IllegalStateException(ack.error() != null ? ack.error() : "library.request refused"));
 				}
 			});
 		return onClientThread(raw);

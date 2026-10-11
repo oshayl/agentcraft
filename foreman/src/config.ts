@@ -1,5 +1,6 @@
 // Configuration: defaults < <AGENTCRAFT_HOME>/config.json < environment < CLI flags.
 import { CAPABILITY_NAMES, CLOSED, type AgentCapabilities, type CapabilityConfig, type RoleCapabilities } from './capabilities.js';
+import { librarySourcesFrom, type LibrarySource } from './filelibrary.js';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -150,6 +151,8 @@ export interface Config {
   engines: EngineChoice;
   /** how far agents may reach outside their worktree (see capabilities.ts); default: closed */
   capabilities: CapabilityConfig;
+  /** read-only markdown folders to browse in game and read without asking (filelibrary.ts) */
+  library: LibrarySource[];
   sim: SimConfig;
 }
 
@@ -253,7 +256,7 @@ export const KNOWN_FLAGS = new Set([
   'lead-model', 'worker-model', 'effort', 'lead-effort', 'max-turns', 'max-turns-lead', 'max-turns-worker',
   'max-concurrent', 'ci', 'max-budget', 'resume', 'lead-review', 'speed', 'seed', 'showcase', 'auto-answer',
   'ambient', 'lead-read-commands', 'lead-engine', 'worker-engine', 'engines', 'codex-path', 'codex-model', 'codex-lead-model',
-  'codex-worker-model', 'codex-effort', 'codex-lead-effort',
+  'codex-worker-model', 'codex-effort', 'codex-lead-effort', 'lead-caps', 'worker-caps', 'library',
 ]);
 
 function engineName(v: unknown, d: EngineName, what: string): EngineName {
@@ -380,6 +383,7 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv = process.env)
         ? { byRepo: Object.fromEntries(Object.entries(fileCaps.byRepo as Record<string, unknown>).map(([r, v]) => [r, roleCapsFrom(v, `repo ${r}`)])) }
         : {}),
     },
+    library: librarySourcesFrom(flags.library ?? env.AGENTCRAFT_LIBRARY ?? file.library, os.homedir()),
     sim: {
       speed: Math.max(0.05, num(flags.speed ?? env.AGENTCRAFT_SIM_SPEED ?? fileSim.speed, 1)),
       seed: num(flags.seed ?? fileSim.seed, 7),

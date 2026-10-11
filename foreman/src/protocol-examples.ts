@@ -121,6 +121,15 @@ export const SERVER_EXAMPLES: Ex<ServerMessage> = {
   'decision.upsert': { v: 1, type: 'decision.upsert', decision },
   'repo.upsert': { v: 1, type: 'repo.upsert', repo },
   'memory.upsert': { v: 1, type: 'memory.upsert', entry: memory },
+  library: {
+    v: 1,
+    type: 'library',
+    requestId: 'r9',
+    source: 'vault',
+    items: [{ id: '10 Projects/AgentCraft.md', title: 'AgentCraft', folder: '10 Projects', updated: ts, size: 4210 }],
+    total: 1,
+    truncated: false,
+  },
   'goal.upsert': { v: 1, type: 'goal.upsert', goal: { id: 'g1', text: 'Add #tags to pocket-notes', progress: 0.56, status: 'active', repoId: 'demo-app', createdAt: ts, updatedAt: ts + 200_000 } },
   'feed.add': { v: 1, type: 'feed.add', item: { ts: ts + 210_000, kind: 'merge', text: 'Merged agentcraft/kit/t2-tag-parser-module into main (7cf1999, 2 files)', agentId: 'marlow' } },
   diff: {
@@ -196,4 +205,5 @@ export const CLIENT_EXAMPLES: Ex<ClientMessage> = {
   'repo.fix': { v: 1, type: 'repo.fix', id: 'c19', action: 'park', repoId: 'demo-app' },
   'permissions.set': { v: 1, type: 'permissions.set', id: 'c20', mode: 'auto' },
   'caps.set': { v: 1, type: 'caps.set', id: 'c21', repoId: 'demo-app', role: 'lead', caps: 'full' },
+  'library.request': { v: 1, type: 'library.request', id: 'c22', requestId: 'r9', source: 'vault', query: 'agentcraft install' },
 };
