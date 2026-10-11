@@ -4,13 +4,16 @@
 // What the agent may do is decided the same way as for Claude agents:
 // - approvalPolicy "untrusted": Codex asks before every command it does not consider trivially safe;
 //   each ask goes through AgentCraft's policy (policy.ts) and, if needed, an in-game prompt
-// - sandbox: workers write only their worktree (+ its git dir, for commits), the lead nothing; no
-//   network inside the sandbox (a command that needs it asks again, through the same policy)
+// - sandbox: workers write only their worktree (+ its git dir, for commits), the lead nothing.
+//   No network inside the sandbox unless the agent has the network capability (capabilities.ts),
+//   and because Codex only honours network_access in the workspace-write sandbox, a lead with
+//   that capability runs workspace-write too; the policy still refuses its writes.
 // - the team tools (send_message, ask_user, update_task...) are dynamic tools answered here
 // - none of the user's own Codex setup leaks in: their MCP servers, plugins, apps, web search,
 //   image generation and notify hooks are off for agent threads (their Codex app is untouched)
 // - commands run with the git safety environment (no push, no hooks, the agent's own identity),
 //   passed explicitly because Codex drops variables named like secrets (GIT_CONFIG_KEY_0...)
+import type { AgentCapabilities } from '../../capabilities.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -61,7 +64,7 @@ export function codexWebSearch(web: boolean | undefined): CodexWebSearch {
   return web ? 'live' : 'disabled';
 }
 
-function notes(role: Role, tools: AgentTool[]): string {
+function notes(role: Role, tools: AgentTool[], caps?: AgentCapabilities): string {
   return [
     '',
     '# Working in AgentCraft (Codex)',
@@ -70,7 +73,7 @@ function notes(role: Role, tools: AgentTool[]): string {
     process.platform === 'win32' ? '- In PowerShell, use npm.cmd and npx.cmd for npm/npx commands. Their .ps1 launchers can fail under the Windows sandbox even when the .cmd launchers work.' : '',
     `- Every command is checked against AgentCraft's policy, and anything it cannot allow by itself is shown to ${userName()}, who may deny it. Never work around a denial: find another way or use ask_user.`,
     `- Do not spawn sub-agents, do not search the web, and ask questions only with ask_user (not request_user_input).`,
-    role === 'lead' ? '- You are read-only: never modify files or run commands that change anything.' : '',
+    role === 'lead' && !caps?.write ? '- You are read-only: never modify files or run commands that change anything.' : '',
   ]
     .filter((l) => l !== '')
     .join('\n');
@@ -226,9 +229,15 @@ export class CodexEngine implements Engine {
       const thread = {
         cwd,
         approvalPolicy: 'untrusted',
-        sandbox: role === 'lead' ? 'read-only' : 'workspace-write',
+        // Codex only honours `network_access` inside the workspace-write sandbox: a read-only
+        // thread has no network at all, whatever that setting says (verified against the
+        // binary). So a lead granted the network capability has to run workspace-write, or it
+        // cannot resolve a host, and `gh` reports its token as invalid because it cannot
+        // reach GitHub to check it. Writing files is still refused for the lead by the
+        // permission policy (policy.ts), which is the layer that actually governs its tools.
+        sandbox: role === 'lead' && !spec.capabilities?.network ? 'read-only' : 'workspace-write',
         config: this.threadConfig(userConfig, spec, serverEnv),
-        developerInstructions: spec.instructions + notes(role, spec.tools),
+        developerInstructions: spec.instructions + notes(role, spec.tools, spec.capabilities),
         dynamicTools,
         ...(model ? { model } : {}),
       };

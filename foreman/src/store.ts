@@ -29,6 +29,13 @@ export interface SessionRecord {
   model?: string;
   /** the engine whose session this is (absent: claude, from before engines) */
   engine?: 'claude' | 'codex';
+  /**
+   * The capabilities the session was started with ("network,push"). A thread carries its
+   * original instructions in its own history, so an agent whose capabilities changed keeps
+   * acting on the old ones ("you are READ-ONLY") however the new instructions are sent. When
+   * this no longer matches, the turn starts a fresh thread instead of resuming.
+   */
+  caps?: string;
   turns: number;
   costUsd: number;
   updatedAt: number;

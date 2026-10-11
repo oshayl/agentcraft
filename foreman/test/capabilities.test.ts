@@ -179,3 +179,38 @@ describe('what the Codex thread config says', () => {
     expect(codexWebSearch(undefined)).toBe('disabled');
   });
 });
+
+describe('the write and force capabilities', () => {
+  const wt = path.join(tempDir('ac-caps-write-'), 'worktrees', 'demo', 'kit-t2');
+  const leadClosed: PolicyContext = { role: 'lead', cwd: wt, tempDirs: [] };
+  const leadWrite: PolicyContext = { ...leadClosed, capabilities: { ...CLOSED, write: true } };
+  const file = path.join(wt, 'src', 'app.ts');
+
+  it('keeps the lead read-only by default', () => {
+    expect(classifyToolUse('Edit', { file_path: file, old_string: 'a', new_string: 'b' }, leadClosed).action).toBe('deny');
+  });
+
+  it('lets the lead edit and write once it has the write capability', () => {
+    expect(classifyToolUse('Edit', { file_path: file, old_string: 'a', new_string: 'b' }, leadWrite).action).toBe('allow');
+    expect(classifyToolUse('Write', { file_path: file, content: 'x' }, leadWrite).action).toBe('allow');
+  });
+
+  it('force opens the destructive git the user terminal already has', () => {
+    const base: PolicyContext = { role: 'worker', cwd: wt, protectedBranches: ['main'] };
+    const pushing: PolicyContext = { ...base, capabilities: { ...CLOSED, network: true, push: true } };
+    const forcing: PolicyContext = { ...base, capabilities: { ...CLOSED, network: true, push: true, force: true } };
+    for (const c of ['git push --force origin feature/x', 'git push origin main', 'git push --delete origin feature/x']) {
+      expect(classifyToolUse('Bash', { command: c }, pushing).action, `without force: ${c}`).toBe('deny');
+      expect(classifyToolUse('Bash', { command: c }, forcing).action, `with force: ${c}`).not.toBe('deny');
+    }
+  });
+
+  it('force implies push and network: they are the same reach', () => {
+    expect(resolveCapabilities({ lead: { force: true } }, 'lead')).toMatchObject({ force: true, push: true, network: true });
+  });
+
+  it('"all" in config means every capability', () => {
+    const every = resolveCapabilities({ lead: { network: true, push: true, mcp: true, web: true, write: true, force: true } }, 'lead');
+    expect(Object.values(every).every(Boolean)).toBe(true);
+  });
+});

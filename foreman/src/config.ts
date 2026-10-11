@@ -85,9 +85,9 @@ function capsFrom(v: unknown, label: string): Partial<AgentCapabilities> | undef
     for (const raw of names) {
       const n = raw.trim().toLowerCase();
       if (!n) continue;
-      if (n === 'all') return { network: true, push: true, mcp: true, web: true };
+      if (n === 'all') return { network: true, push: true, mcp: true, web: true, write: true, force: true };
       if (n === 'none' || n === 'closed') return { ...CLOSED };
-      if (n !== 'network' && n !== 'push' && n !== 'mcp' && n !== 'web') throw new Error(`unknown ${label} capability "${raw.trim()}" (use network, push, mcp, web, all or none)`);
+      if (n !== 'network' && n !== 'push' && n !== 'mcp' && n !== 'web' && n !== 'write' && n !== 'force') throw new Error(`unknown ${label} capability "${raw.trim()}" (use network, push, mcp, web, write, force, all or none)`);
       out[n] = true;
     }
     return out;
@@ -95,7 +95,7 @@ function capsFrom(v: unknown, label: string): Partial<AgentCapabilities> | undef
   if (typeof v === 'object') {
     const o = v as Record<string, unknown>;
     const out: Partial<AgentCapabilities> = {};
-    for (const k of ['network', 'push', 'mcp', 'web'] as const) if (k in o) out[k] = !!o[k];
+    for (const k of ['network', 'push', 'mcp', 'web', 'write', 'force'] as const) if (k in o) out[k] = !!o[k];
     return out;
   }
   throw new Error(`${label} capabilities must be a list or an object`);

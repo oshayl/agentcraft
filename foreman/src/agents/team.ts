@@ -824,7 +824,12 @@ export class TeamBackend implements Backend {
       const engine = this.engineFor(agentId);
       const session = this.fm.store.data.sessions[job.sessionKey];
       // a session belongs to the engine that made it (records from before engines were Claude's)
-      const resume = !job.fresh && session?.sessionId && (session.engine ?? 'claude') === engine.id ? session.sessionId : undefined;
+      const caps = describeCapabilities(this.capsFor(agentId, role));
+      // Capabilities changed since this thread started: its history still holds the old rules,
+      // so resuming would keep the agent believing them. Start a new thread instead.
+      const sameCaps = (session?.caps ?? caps) === caps;
+      const resume = !job.fresh && session?.sessionId && (session.engine ?? 'claude') === engine.id && sameCaps ? session.sessionId : undefined;
+      if (session?.sessionId && !sameCaps) this.fm.log.info(`${agentId}: capabilities changed (${session.caps} -> ${caps}); starting a fresh thread`);
       this.st.inflight[agentId] = { kind: job.kind, sessionKey: job.sessionKey, startedAt: Date.now(), ...(job.taskId ? { taskId: job.taskId } : {}), ...(job.goalId ? { goalId: job.goalId } : {}) };
       this.fm.store.markDirty();
 
@@ -863,7 +868,7 @@ export class TeamBackend implements Backend {
             entry.spawnedAt = Date.now();
           },
           onSession: (id) => {
-            if (this.fm.store.data.sessions[job.sessionKey]?.sessionId !== id) this.recordSession(job.sessionKey, id, model, engine.id);
+            if (this.fm.store.data.sessions[job.sessionKey]?.sessionId !== id) this.recordSession(job.sessionKey, id, model, engine.id, undefined, caps);
           },
           onModel: (m) => {
             const label = modelLabel(m);
@@ -875,7 +880,7 @@ export class TeamBackend implements Backend {
       } finally {
         clearTimeout(timer);
       }
-      if (stats.sessionId) this.recordSession(job.sessionKey, stats.sessionId, model, engine.id, stats);
+      if (stats.sessionId) this.recordSession(job.sessionKey, stats.sessionId, model, engine.id, stats, caps);
       if (stats.authFailed) this.markAuthFailed(engine.authFailedMessage(stats.authFailed));
     } catch (e) {
       const aborted = abort.signal.aborted;
@@ -935,11 +940,12 @@ export class TeamBackend implements Backend {
     this.onUserMessage(agentId, fromUser[fromUser.length - 1]!.text);
   }
 
-  private recordSession(key: string, sessionId: string, model: string, engine: EngineId, stats?: TurnStats): void {
+  private recordSession(key: string, sessionId: string, model: string, engine: EngineId, stats?: TurnStats, caps?: string): void {
     const s = (this.fm.store.data.sessions[key] ??= { turns: 0, costUsd: 0, updatedAt: Date.now() });
     s.sessionId = sessionId;
     s.model = model;
     s.engine = engine;
+    if (caps !== undefined) s.caps = caps;
     s.updatedAt = Date.now();
     if (stats) {
       s.turns += stats.numTurns ?? 0;

@@ -75,7 +75,7 @@ export class ClaudeEngine implements Engine {
       permissionMode: 'default',
       canUseTool,
       // the lead's Bash is read-only: the policy asks before anything that writes
-      tools: role === 'lead' ? ['Read', 'Grep', 'Glob', 'Bash'] : ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'TodoWrite'],
+      tools: role === 'lead' && !spec.capabilities?.write ? ['Read', 'Grep', 'Glob', 'Bash'] : ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'TodoWrite'],
       // no allowedTools: every tool call (incl. our MCP tools) goes through canUseTool/policy.
       // Subagents are always off; the web tools and `git push` are off unless this agent has
       // the matching capability, in which case the policy decides each call (capabilities.ts).

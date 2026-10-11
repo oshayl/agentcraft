@@ -960,10 +960,14 @@ const PUSH_DESTRUCTIVE = /^(-f|--force|--force-with-lease(=.*)?|--force-if-inclu
 function pushJudgment(rest: string[], sc: SegCtx): J {
   const ctx = sc.env.ctx;
   if (!ctx.capabilities?.push) return refuse(PUSH_DENY);
-  const protect = new Set([...BUILTIN_PROTECTED, ...(ctx.protectedBranches ?? [])].map((b) => b.toLowerCase()));
+  // With `force` the agent has the same git as the user's own terminal: nothing below applies.
+  const force = !!ctx.capabilities.force;
+  const protect = new Set(force ? [] : [...BUILTIN_PROTECTED, ...(ctx.protectedBranches ?? [])].map((b) => b.toLowerCase()));
   const args = rest.map((a) => a.replace(/\\(.)/g, '$1'));
-  for (const a of args) {
-    if (PUSH_DESTRUCTIVE.test(a)) return refuse(`git push ${a} can rewrite or remove work on the remote, which is never allowed for an agent (push the branch normally instead)`);
+  if (!force) {
+    for (const a of args) {
+      if (PUSH_DESTRUCTIVE.test(a)) return refuse(`git push ${a} can rewrite or remove work on the remote, which is never allowed without the force capability`);
+    }
   }
   // Anything the parser cannot read (a variable, a substitution) could be any of the above.
   if (args.some((a) => isDynamic(a))) return refuse(DYNAMIC_PUSH_DENY);
@@ -971,9 +975,9 @@ function pushJudgment(rest: string[], sc: SegCtx): J {
   const remote = refspecs[0] ?? 'origin';
   const specs = refspecs.slice(1);
   for (const spec of specs) {
-    if (spec.startsWith('+')) return refuse('a leading "+" force-updates the remote branch, which is never allowed for an agent');
+    if (!force && spec.startsWith('+')) return refuse('a leading "+" force-updates the remote branch, which needs the force capability');
     const [src, dst] = spec.includes(':') ? [spec.slice(0, spec.indexOf(':')), spec.slice(spec.indexOf(':') + 1)] : [spec, spec];
-    if (!src) return refuse('a push with an empty source deletes the remote branch, which is never allowed for an agent');
+    if (!force && !src) return refuse('a push with an empty source deletes the remote branch, which needs the force capability');
     const branch = (dst || src).replace(/^refs\/heads\//, '');
     if (protect.has(branch.toLowerCase())) return refuse(`${branch} is a protected branch: changes reach it through a merge decision you answer, not through a push`);
   }
@@ -2153,7 +2157,7 @@ export function classifyToolUse(toolName: string, input: Record<string, unknown>
   }
 
   if (EDIT_TOOLS.has(toolName)) {
-    if (ctx.role === 'lead') return { action: 'deny', reason: 'The lead is read-only: create a task for a worker instead of editing files.' };
+    if (ctx.role === 'lead' && !ctx.capabilities?.write) return { action: 'deny', reason: 'The lead is read-only: create a task for a worker instead of editing files.' };
     const p = pathArg(input);
     if (!p) return askVerdict(`${toolName} without a path`, `${toolName}:nopath`);
     const abs = resolveIn(ctx.cwd, p, ctx);
@@ -2174,7 +2178,7 @@ export function classifyToolUse(toolName: string, input: Record<string, unknown>
   if (toolName === 'Bash' || toolName === 'PowerShell') {
     const command = typeof input.command === 'string' ? input.command : '';
     const v = classifyBash(command, ctx);
-    if (ctx.role !== 'lead' || v.action === 'deny') return v;
+    if (ctx.role !== 'lead' || ctx.capabilities?.write || v.action === 'deny') return v;
     // the lead works in the user's checkout: only inspection commands run without asking, and an
     // approval covers exactly that command
     if (v.action === 'allow' && isReadOnlyCommand(command, ctx)) return v;

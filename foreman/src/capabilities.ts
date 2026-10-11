@@ -32,10 +32,21 @@ export interface AgentCapabilities {
   mcp: boolean;
   /** WebSearch and WebFetch are available */
   web: boolean;
+  /**
+   * The lead may change files and run commands that write, like a worker. Without this the lead
+   * is read-only: it inspects the user's checkout and delegates the work.
+   */
+  write: boolean;
+  /**
+   * Git's destructive operations are allowed: force push, branch delete, --mirror/--all, and
+   * pushes to a base branch. This is what a plain terminal can do; AgentCraft withholds it by
+   * default so an autonomous agent cannot rewrite or remove the user's work.
+   */
+  force: boolean;
 }
 
 /** The default: everything closed. */
-export const CLOSED: AgentCapabilities = Object.freeze({ network: false, push: false, mcp: false, web: false });
+export const CLOSED: AgentCapabilities = Object.freeze({ network: false, push: false, mcp: false, web: false, write: false, force: false });
 
 export interface CapabilityConfig {
   lead?: Partial<AgentCapabilities>;
@@ -48,6 +59,7 @@ export interface CapabilityConfig {
 export function resolveCapabilities(cfg: CapabilityConfig | undefined, role: 'lead' | 'worker', agentId?: string): AgentCapabilities {
   const caps: AgentCapabilities = { ...CLOSED, ...(role === 'lead' ? cfg?.lead : cfg?.worker), ...(agentId ? cfg?.byAgent?.[agentId] : undefined) };
   if (caps.push) caps.network = true;
+  if (caps.force) caps.push = caps.network = true;
   return caps;
 }
 
