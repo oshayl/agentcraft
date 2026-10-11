@@ -989,8 +989,8 @@ Steer a task from the Task Wall.
 | --- | --- | --- | --- |
 | `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
 | `taskId` | string | yes |  |
-| `action` | `reassign` \| `cancel` \| `retry` \| `prioritize` | yes |  |
-| `arg` | string | no | reassign: agent id; prioritize: integer priority (default: bump to top) |
+| `action` | `reassign` \| `cancel` \| `retry` \| `prioritize` \| `unblock` | yes |  |
+| `arg` | string | no | reassign: agent id; prioritize: integer priority (default: bump to top); unblock: what the worker was waiting to be told, which reaches it as a message and puts the task back on the board |
 
 ```json
 {

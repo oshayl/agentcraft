@@ -50,7 +50,7 @@ export interface Backend {
    * method) leaves the merge decision open with the reason, for the user to handle.
    */
   onMergeConflict?(task: Task, info: { base: string; branch: string; files: string[]; reason: string }): boolean;
-  onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize', arg?: string): void;
+  onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void;
   onAgentAction(agentId: string, action: 'pause' | 'resume' | 'stop' | 'spawn', arg?: string): Promise<void> | void;
   /** Every task of a goal is done: the lead's last turn on it (the artifact), if the backend wants one. */
   onGoalComplete?(goal: Goal): void;
@@ -752,7 +752,7 @@ export class Foreman {
     return { to: target, text: body };
   }
 
-  taskAction(taskId: string, action: 'reassign' | 'cancel' | 'retry' | 'prioritize', arg?: string): void {
+  taskAction(taskId: string, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void {
     const t = this.tasks.require(taskId);
     switch (action) {
       case 'cancel':
@@ -770,6 +770,19 @@ export class Foreman {
         const p = arg !== undefined && arg !== '' && Number.isFinite(Number(arg)) ? Math.trunc(Number(arg)) : top + 1;
         this.tasks.update(t.id, { priority: p });
         this.bus.feed('task', `Task ${t.id} priority -> ${p}`, { agentId: 'user' });
+        break;
+      }
+      case 'unblock': {
+        // A worker blocks when it needs something only the user knows. Until now the only way
+        // back was to retry it (which just runs it again into the same wall) or to message the
+        // agent and hope. This answers the blocker: the task goes back on the board with what
+        // it was waiting for, and the worker reads it as its next instruction.
+        if (!arg?.trim()) throw new ClientError(`unblock needs an answer: what was ${t.assignee ? this.nameOf(t.assignee) : 'the worker'} waiting to be told?`);
+        const was = t.blockedReason ?? 'blocked';
+        this.tasks.update(t.id, { blockedReason: null });
+        this.tasks.setStatus(t.id, t.assignee ? 'doing' : 'todo', { force: true });
+        if (t.assignee) this.bus.send('user', t.assignee, `About ${t.id} being blocked ("${truncate(was, 200)}"): ${arg.trim()}`);
+        this.bus.feed('task', `${userName()} unblocked ${t.id}: ${truncate(arg.trim(), 160)}`, { agentId: 'user' });
         break;
       }
       case 'reassign': {

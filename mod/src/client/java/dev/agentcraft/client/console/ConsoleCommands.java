@@ -126,7 +126,7 @@ public final class ConsoleCommands {
 		new Command("resume", "/resume @agent", "resume a paused or stopped agent"),
 		new Command("stop", "/stop @agent", "take an agent off shift"),
 		new Command("spawn", "/spawn @agent [task]", "bring an agent on shift"),
-		new Command("task", "/task <id> cancel|retry|prioritize|reassign", "steer a task"),
+		new Command("task", "/task <id> unblock <answer>|cancel|retry|prioritize|reassign", "steer a task, or answer what blocked it"),
 		new Command("repo", "/repo add <path>", "register a local git repo"),
 		new Command("repos", "/repos", "list repos"),
 		new Command("fix", "/fix [review|land|park|unpark|deps] [repo]", "review or clear what is blocking work"),
@@ -140,7 +140,7 @@ public final class ConsoleCommands {
 		new Command("help", "/help", "this list"));
 
 	private static final List<String> AGENT_ACTIONS = List.of("pause", "resume", "stop", "spawn");
-	private static final List<String> TASK_ACTIONS = List.of("cancel", "retry", "prioritize", "reassign");
+	private static final List<String> TASK_ACTIONS = List.of("cancel", "retry", "prioritize", "reassign", "unblock");
 
 	// ------------------------------------------------------------------ parse
 
@@ -446,21 +446,21 @@ public final class ConsoleCommands {
 
 	private static Intent parseTask(List<String> args, ForemanState s) {
 		if (args.isEmpty()) {
-			return new Invalid("usage: /task <id> cancel|retry|prioritize [n]|reassign @agent");
+			return new Invalid("usage: /task <id> unblock <answer>|cancel|retry|prioritize [n]|reassign @agent");
 		}
 		String tid = args.get(0).startsWith("#") ? args.get(0).substring(1) : args.get(0);
 		if (s.task(tid) == null) {
 			return new Invalid("no task " + tid + taskListSuffix(s));
 		}
 		if (args.size() < 2) {
-			return new Invalid("what should happen to " + tid + "? cancel, retry, prioritize [n] or reassign @agent");
+			return new Invalid("what should happen to " + tid + "? unblock <answer>, cancel, retry, prioritize [n] or reassign @agent");
 		}
 		String action = args.get(1).toLowerCase(Locale.ROOT);
 		if (action.equals("prio") || action.equals("priority")) {
 			action = "prioritize";
 		}
 		if (!TASK_ACTIONS.contains(action)) {
-			return new Invalid("unknown task action '" + action + "': cancel, retry, prioritize [n] or reassign @agent");
+			return new Invalid("unknown task action '" + action + "': unblock <answer>, cancel, retry, prioritize [n] or reassign @agent");
 		}
 		String arg = null;
 		if (action.equals("reassign")) {
@@ -472,6 +472,16 @@ public final class ConsoleCommands {
 			if (arg == null) {
 				return new Invalid("no agent named @" + bare + agentListSuffix(s));
 			}
+		} else if (action.equals("unblock")) {
+			// everything after the word is the answer, spaces and all: it is a sentence, not a flag
+			if (args.size() < 3) {
+				return new Invalid("what was the worker waiting to be told? /task " + tid + " unblock <answer>");
+			}
+			StringBuilder b = new StringBuilder();
+			for (int i = 2; i < args.size(); i++) {
+				b.append(i > 2 ? " " : "").append(args.get(i));
+			}
+			arg = b.toString();
 		} else if (action.equals("prioritize") && args.size() >= 3) {
 			try {
 				arg = Integer.toString(Integer.parseInt(args.get(2)));

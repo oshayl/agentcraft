@@ -1,0 +1,21 @@
+{
+  "replace": false,
+  "values": [
+    "agentcraft:noira_ink_1x1",
+    "agentcraft:noira_ink_2x2",
+    "agentcraft:noira_ink_2x3",
+    "agentcraft:noira_ink_4x4",
+    "agentcraft:noira_bone_1x1",
+    "agentcraft:noira_bone_2x2",
+    "agentcraft:noira_bone_2x3",
+    "agentcraft:noira_bone_4x4",
+    "agentcraft:noira_brass_1x1",
+    "agentcraft:noira_brass_2x2",
+    "agentcraft:noira_brass_2x3",
+    "agentcraft:noira_brass_4x4",
+    "agentcraft:noira_clay_1x1",
+    "agentcraft:noira_clay_2x2",
+    "agentcraft:noira_clay_2x3",
+    "agentcraft:noira_clay_4x4"
+  ]
+}

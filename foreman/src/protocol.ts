@@ -409,8 +409,13 @@ export const DecisionAnswerMsg = z.object({
 export const TaskActionMsg = z.object({
   ...envelope('task.action'),
   taskId: Id,
-  action: z.enum(['reassign', 'cancel', 'retry', 'prioritize']),
-  arg: z.string().optional().describe('reassign: agent id; prioritize: integer priority (default: bump to top)'),
+  action: z.enum(['reassign', 'cancel', 'retry', 'prioritize', 'unblock']),
+  arg: z
+    .string()
+    .optional()
+    .describe(
+      'reassign: agent id; prioritize: integer priority (default: bump to top); unblock: what the worker was waiting to be told, which reaches it as a message and puts the task back on the board',
+    ),
 });
 export const AgentActionMsg = z.object({
   ...envelope('agent.action'),

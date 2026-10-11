@@ -1311,7 +1311,7 @@ export class TeamBackend implements Backend {
     return true;
   }
 
-  onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize'): void {
+  onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void {
     if (action === 'cancel' || action === 'reassign') {
       for (const [id, r] of this.running) {
         if (r.job.taskId === task.id && id !== LEAD && (action === 'cancel' || task.assignee !== id)) this.abortTurn(r, 'cancel');
@@ -1322,6 +1322,17 @@ export class TeamBackend implements Backend {
         const wt = this.fm.repos.findWorktree(task.repoId, task.worktree);
         if (wt && wt.status === 'active' && wt.agentId !== task.assignee) this.handOff(task.id, wt.agentId, `reassigned to ${this.fm.nameOf(task.assignee ?? 'user')}`);
       }
+    }
+    // unblocked: the worker picks the task straight back up, with the answer in its prompt
+    if (action === 'unblock' && task.assignee && !this.isStopped(task.assignee)) {
+      this.enqueue({
+        kind: 'followup',
+        agentId: task.assignee,
+        taskId: task.id,
+        ...(task.goalId ? { goalId: task.goalId } : {}),
+        sessionKey: `${task.assignee}:${task.id}`,
+        prompt: `${userName()} answered what you were blocked on for ${task.id}: ${arg?.trim() ?? ''}\n\nCarry on with the task. When it is done call update_task("${task.id}", status "review", summary).`,
+      });
     }
     this.tick();
   }
