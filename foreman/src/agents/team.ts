@@ -27,7 +27,7 @@ import type { ClaudeConfig } from '../config.js';
 import { FOREMAN_VERSION } from '../config.js';
 import { ClientError, type Backend, type Foreman } from '../foreman.js';
 import { withGitSafety } from '../gitsafety.js';
-import { resolveCapabilities, type AgentCapabilities, type CapabilityConfig } from '../capabilities.js';
+import { describeCapabilities, resolveCapabilities, type AgentCapabilities, type CapabilityConfig } from '../capabilities.js';
 import { agentGitIdentity } from '../util/git.js';
 import { classifyToolUse, describeRuleKey, describeToolCall } from '../policy.js';
 import type { BackendName, Decision, Goal, Task } from '../protocol.js';
@@ -312,6 +312,11 @@ export class TeamBackend implements Backend {
       this.fm.log.info(`${engine.id} auth ok (${r.account})`);
     }
     this.authFailed = false;
+    // Say plainly how far agents may reach: a granted capability changes what the whole team
+    // can do to the outside world, so it should never be visible only in a config file.
+    const lead = describeCapabilities(this.capsFor(LEAD, 'lead'));
+    const worker = describeCapabilities(this.capsFor(this.team.find((a) => a !== LEAD) ?? 'worker', 'worker'));
+    this.fm.log.info(`capabilities: lead ${lead} | workers ${worker}`);
     this.fm.setStatus({ auth: 'ok', account: accounts.join(' · '), message: this.teamLabel() });
     return true;
   }
