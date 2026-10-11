@@ -27,7 +27,6 @@ import type { ClaudeConfig } from '../config.js';
 import { FOREMAN_VERSION } from '../config.js';
 import { ClientError, type Backend, type Foreman } from '../foreman.js';
 import { withGitSafety } from '../gitsafety.js';
-import { artifactBrief, artifactsNamedIn } from '../artifacts.js';
 import { describeCapabilities, resolveCapabilities, withRepoCapabilities, type AgentCapabilities, type CapabilityConfig } from '../capabilities.js';
 import { agentGitIdentity } from '../util/git.js';
 import { classifyToolUse, describeRuleKey, describeToolCall } from '../policy.js';
@@ -1194,7 +1193,7 @@ export class TeamBackend implements Backend {
     const mine = this.fm.bus.inbox(id).filter((m) => m.from === 'user' && (m.to === id || (to === 'all' && m.to === 'all')));
     const body = mine.length ? mine.map((m) => m.text).join('\n\n') : text;
     const consume = () => this.fm.bus.markRead(id, mine.map((m) => m.id));
-    const named = artifactBrief(artifactsNamedIn(body, this.fm.memory.artifacts()), (mid) => this.fm.memory.pathOf(mid));
+    const named = this.fm.mentionBrief(body);
     const prompt = `Message from ${userName()}: ${body}\n${named}\n${note ? `${note}\n\n` : ''}Respond briefly with send_message(to "user") and act on it if needed (lead: create or update tasks; worker: adjust your work).`;
     if (id === LEAD) {
       const goal = this.fm.currentGoal();

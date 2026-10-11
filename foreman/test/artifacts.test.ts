@@ -9,7 +9,7 @@ import { TeamBackend } from '../src/agents/team.js';
 import { TOOL_NAMES } from '../src/agents/tools.js';
 import type { Engine, TurnSpec, TurnStats } from '../src/agents/engine.js';
 import { agentTools } from '../src/agents/tools.js';
-import { artifactBrief, artifactItems, artifactLine, artifactsNamedIn, openItems, renderArtifact, shortId } from '../src/artifacts.js';
+import { artifactBrief, artifactItems, artifactLine, artifactsNamedIn, mentionsIn, notesBrief, openItems, renderArtifact, shortId } from '../src/artifacts.js';
 import { ARTIFACT_SCOPE } from '../src/memory.js';
 import type { Goal, MemoryEntry } from '../src/protocol.js';
 import { demoRepo, makeForeman, rmrf, tempDir, type Harness } from './helpers.js';
@@ -266,5 +266,35 @@ describe('a thread started before a tool existed', () => {
     const tools = [...TOOL_NAMES.common, ...TOOL_NAMES.lead].slice().sort().join(',');
     const spec = await leadTurn({ caps: 'closed', tools });
     expect(spec.resume).toBe('thread-old');
+  });
+});
+
+// Typing an id by hand is what the `#` mention exists to avoid: the console completes these from
+// the artifacts and the user's own folders, so the text that arrives holds an exact name.
+describe('# mentions', () => {
+  it('reads a bare name and a quoted one', () => {
+    expect(mentionsIn('read #movement-review and do the open items')).toEqual(['movement-review']);
+    expect(mentionsIn('read #"10 Projects/Second Brain.md" first')).toEqual(['10 Projects/Second Brain.md']);
+    expect(mentionsIn('check #aa and #"b c" and #aa again')).toEqual(['aa', 'b c']);
+    expect(mentionsIn('a lone #x is noise, not a name'), 'one character is not a mention').toEqual([]);
+  });
+
+  it('ignores a bare # and the middle of a word', () => {
+    expect(mentionsIn('nothing here')).toEqual([]);
+    expect(mentionsIn('# alone')).toEqual([]);
+    expect(mentionsIn('issue#1')).toEqual([]);
+  });
+
+  it('resolves an artifact named by mention even when the prose does not', () => {
+    const e = { id: 'artifacts/review', scope: 'artifacts', title: 'A review', body: '- [ ] do it', updated: 1 };
+    expect(artifactsNamedIn('work on #review now', [e])).toHaveLength(1);
+    expect(artifactsNamedIn('work on reviewing now', [e])).toHaveLength(0);
+  });
+
+  it('tells the lead where a note lives and that it is not theirs to change', () => {
+    const brief = notesBrief([{ source: 'vault', label: 'Vault', path: '/Users/me/Vault/Notes.md', title: 'Notes' }]);
+    expect(brief).toContain('/Users/me/Vault/Notes.md');
+    expect(brief).toContain('read-only');
+    expect(notesBrief([])).toBe('');
   });
 });

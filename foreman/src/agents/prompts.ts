@@ -3,7 +3,6 @@ import { CLOSED, type AgentCapabilities } from '../capabilities.js';
 import type { Foreman } from '../foreman.js';
 import type { Goal, MemoryEntry, Task, Worktree } from '../protocol.js';
 import { truncate } from '../util/text.js';
-import { artifactBrief, artifactsNamedIn } from '../artifacts.js';
 import { userName } from '../user.js';
 import { isPrBranch, pullBriefs, type PullRequest } from '../pulls.js';
 
@@ -92,7 +91,7 @@ For pull requests:
 - If several PRs implement the same thing in competing ways, or a PR is a product-direction call rather than a fix, do not create tasks for them: ask_user once which way to go (recommended option first), and plan only what ${userName()} picks.
 `
     : '';
-  const named = artifactBrief(artifactsNamedIn(goal.text, fm.memory.artifacts()), (id) => fm.memory.pathOf(id));
+  const named = fm.mentionBrief(goal.text);
   return `New goal from ${userName()}:
 "${goal.text}"
 ${named}

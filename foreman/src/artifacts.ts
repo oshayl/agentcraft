@@ -13,6 +13,7 @@
 // and agents reach it with read_memory. The open items are plain `- [ ]` checkboxes, so ticking
 // one off in an editor is the same act as ticking it off here.
 import type { Goal, MemoryEntry } from './protocol.js';
+import { userName } from './user.js';
 
 /** One line of work an artifact still has open (or has had ticked off). */
 export interface ArtifactItem {
@@ -93,6 +94,8 @@ export function shortId(entry: MemoryEntry): string {
  * resolve to nothing rather than to the lead's best guess.
  */
 export function artifactsNamedIn(text: string, all: MemoryEntry[]): MemoryEntry[] {
+  // a `#mention` names a thing outright, so it matches before any prose does
+  const mentioned = mentionsIn(text);
   const hay = text.toLowerCase();
   const hit = (needle: string): boolean => {
     const n = needle.toLowerCase();
@@ -107,7 +110,24 @@ export function artifactsNamedIn(text: string, all: MemoryEntry[]): MemoryEntry[
       from = i + 1;
     }
   };
-  return all.filter((e) => hit(e.id) || hit(shortId(e)) || hit(`${shortId(e)}.md`) || hit(e.title));
+  const named = (e: MemoryEntry): boolean =>
+    mentioned.some((t) => t.toLowerCase() === e.id.toLowerCase() || t.toLowerCase() === shortId(e).toLowerCase() || t.toLowerCase() === e.title.toLowerCase());
+  return all.filter((e) => named(e) || hit(e.id) || hit(shortId(e)) || hit(`${shortId(e)}.md`) || hit(e.title));
+}
+
+/**
+ * The things a prompt points at with `#`: `#movement-review`, or `#"10 Projects/Notes.md"` when
+ * the name has spaces in it. The console completes these from the artifacts and the user's own
+ * folders, so in practice they are picked from a list rather than typed.
+ */
+export function mentionsIn(text: string): string[] {
+  const out: string[] = [];
+  const re = /#(?:"([^"\n]{1,300})"|([^\s"#]{2,300}))/g;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const token = (m[1] ?? m[2] ?? '').trim();
+    if (token && !out.includes(token)) out.push(token);
+  }
+  return out;
 }
 
 /** What the lead is told about the artifacts a goal or message names. */
@@ -125,4 +145,11 @@ export function artifactBrief(entries: MemoryEntry[], pathOf: (id: string) => st
     ].join('\n');
   });
   return `\nArtifacts named above - read each one before you plan, and treat its open items as the work:\n${blocks.join('\n')}\n`;
+}
+
+/** What the lead is told about the user's own notes a prompt points at. */
+export function notesBrief(notes: Array<{ source: string; label: string; path: string; title: string }>): string {
+  if (!notes.length) return '';
+  const lines = notes.map((n) => `- "${n.title}" (${n.label}): ${n.path}`);
+  return `\nNotes ${userName()} pointed at - read these files before you plan. They are ${userName()}'s own notes and read-only: never change them.\n${lines.join('\n')}\n`;
 }

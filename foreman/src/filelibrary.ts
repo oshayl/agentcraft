@@ -99,6 +99,32 @@ export class FileLibrary {
     return { items: matched.slice(0, limit), total: matched.length, truncated: index.truncated };
   }
 
+  /**
+   * The note a `#mention` points at, across every source: an exact path, a path ending in what
+   * was typed, or a title. Returns nothing when it is ambiguous or absent, because a prompt that
+   * points at the wrong file is worse than one that points at none.
+   */
+  find(needle: string): { source: LibrarySource; item: LibraryItem } | undefined {
+    const want = needle.trim().toLowerCase().replace(/^\/+/, '');
+    if (want.length < 2) return undefined;
+    const hits: Array<{ source: LibrarySource; item: LibraryItem }> = [];
+    for (const src of this.sources()) {
+      for (const item of this.index(src).items) {
+        const id = item.id.toLowerCase();
+        const stem = id.replace(/\.(md|markdown|txt)$/, '');
+        if (id === want || stem === want || id.endsWith(`/${want}`) || stem.endsWith(`/${want}`) || item.title.toLowerCase() === want) {
+          hits.push({ source: src, item });
+        }
+      }
+    }
+    return hits.length === 1 ? hits[0] : undefined;
+  }
+
+  /** The absolute path of a note, for telling an agent where to read it. */
+  pathOf(src: LibrarySource, item: LibraryItem): string {
+    return path.join(src.root, item.id);
+  }
+
   /** One note's text. `id` is a path relative to the root; anything outside the root is refused. */
   read(sourceId: string, id: string): LibraryItem & { body: string } {
     const src = this.source(sourceId);

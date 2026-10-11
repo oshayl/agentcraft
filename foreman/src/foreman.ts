@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { MessageBus } from './bus.js';
+import { artifactBrief, artifactsNamedIn, mentionsIn, notesBrief } from './artifacts.js';
 import { CLOSED, describeCapabilities, type AgentCapabilities, type RoleCapabilities } from './capabilities.js';
 import { loadCast, type CastMember } from './cast.js';
 import type { Config } from './config.js';
@@ -488,6 +489,21 @@ export class Foreman {
         ? 'Permissions: auto. Agents no longer wait for you on permission prompts. Pushes and other hard denials are still refused, and merges still need you.'
         : 'Permissions: ask. Every permission prompt comes to you again.',
     );
+  }
+
+  /**
+   * What a goal or a message points at with `#`, written out for the agent: artifacts with their
+   * open items, and the user's own notes with the path to read them at. Resolving it here rather
+   * than leaving the agent to search means a mention is worth typing.
+   */
+  mentionBrief(text: string): string {
+    const artifacts = artifactsNamedIn(text, this.memory.artifacts());
+    const notes = [];
+    for (const token of mentionsIn(text)) {
+      const hit = this.library.find(token);
+      if (hit) notes.push({ source: hit.source.id, label: hit.source.label, path: this.library.pathOf(hit.source, hit.item), title: hit.item.title });
+    }
+    return artifactBrief(artifacts, (id) => this.memory.pathOf(id)) + notesBrief(notes);
   }
 
   /** Per-repository capability overrides (capabilities.ts), applied over the config file's roles. */

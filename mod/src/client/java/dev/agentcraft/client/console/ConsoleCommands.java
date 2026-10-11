@@ -704,6 +704,14 @@ public final class ConsoleCommands {
 		List<String> before = splitArgs(head.substring(0, ts));
 		String lower = token.toLowerCase(Locale.ROOT);
 
+		// `#` names a thing to read - an artifact, or a note in one of your own folders - and it
+		// works anywhere in a line, because that is where you say it: "review #foo and do the
+		// open items". Picking from the list is the point; the ids are too long to type.
+		if (token.startsWith("#")) {
+			mentionCompletions(out, ts, cursor, lower.substring(1));
+			return out;
+		}
+
 		if (before.isEmpty()) {
 			if (token.startsWith("@")) {
 				agentCompletions(out, ts, cursor, lower.substring(1), s, true, " ");
@@ -853,6 +861,38 @@ public final class ConsoleCommands {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * What `#` offers: the team's artifacts first (they are few and they are the usual answer),
+	 * then notes from the read-only folders. A note's name has spaces in it, so it comes back
+	 * quoted - {@code #"10 Projects/Notes.md"} - which the Foreman reads back as one name.
+	 */
+	private static void mentionCompletions(List<Completion> out, int start, int end, String prefix) {
+		for (Protocol.MemoryEntry e : dev.agentcraft.client.library.MemoryIndex.entries(dev.agentcraft.client.library.MemoryIndex.ARTIFACTS)) {
+			String id = e.id().substring(e.id().indexOf('/') + 1);
+			if (!id.toLowerCase(Locale.ROOT).contains(prefix) && !e.title().toLowerCase(Locale.ROOT).contains(prefix)) {
+				continue;
+			}
+			String items = dev.agentcraft.client.library.MemoryIndex.itemCount(e);
+			out.add(new Completion(start, end, "#" + id + " ", e.title(), items == null ? "artifact" : "artifact · " + items, null, null));
+		}
+		for (Protocol.LibrarySource src : dev.agentcraft.client.library.FileNotes.sources()) {
+			if (prefix.length() >= 2) {
+				// ask the Foreman to search the folder rather than filtering the newest few
+				dev.agentcraft.client.library.FileNotes.search(src.id(), prefix);
+			}
+			for (Protocol.MemoryEntry e : dev.agentcraft.client.library.FileNotes.entries(src.id())) {
+				String path = e.id().substring(e.id().indexOf('/') + 1);
+				if (!path.toLowerCase(Locale.ROOT).contains(prefix) && !e.title().toLowerCase(Locale.ROOT).contains(prefix)) {
+					continue;
+				}
+				out.add(new Completion(start, end, "#\"" + path + "\" ", e.title(), src.label() + " · " + path, null, null));
+				if (out.size() > 40) {
+					return;
+				}
+			}
+		}
 	}
 
 	private static void agentCompletions(List<Completion> out, int start, int end, String prefix, ForemanState s, boolean withAll, String suffix) {
