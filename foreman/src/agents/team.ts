@@ -827,7 +827,10 @@ export class TeamBackend implements Backend {
       const caps = describeCapabilities(this.capsFor(agentId, role));
       // Capabilities changed since this thread started: its history still holds the old rules,
       // so resuming would keep the agent believing them. Start a new thread instead.
-      const sameCaps = (session?.caps ?? caps) === caps;
+      // An exact match only. A session recorded before capabilities existed has no fingerprint,
+      // and its thread history holds whatever rules applied then, so it must not be resumed
+      // either: "unknown" is a mismatch, not a match.
+      const sameCaps = session?.caps === caps;
       const resume = !job.fresh && session?.sessionId && (session.engine ?? 'claude') === engine.id && sameCaps ? session.sessionId : undefined;
       if (session?.sessionId && !sameCaps) this.fm.log.info(`${agentId}: capabilities changed (${session.caps} -> ${caps}); starting a fresh thread`);
       this.st.inflight[agentId] = { kind: job.kind, sessionKey: job.sessionKey, startedAt: Date.now(), ...(job.taskId ? { taskId: job.taskId } : {}), ...(job.goalId ? { goalId: job.goalId } : {}) };
