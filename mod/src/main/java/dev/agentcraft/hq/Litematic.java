@@ -207,9 +207,14 @@ public final class Litematic {
 	}
 
 	/**
-	 * The palette: {@code {Name, Properties}} per entry, which is the same shape vanilla writes,
-	 * so the game's own reader does the work (including the properties). It answers air for a
-	 * block this version does not have, which is how an unknown block is spotted and reported.
+	 * The palette, one {@code {Name, Properties}} compound per entry.
+	 *
+	 * <p>Those are Litematica's key names, and they were vanilla's too until Minecraft renamed its
+	 * own block-state keys to {@code id} and {@code properties}. So the keys are renamed here and
+	 * the game's own reader does the rest, properties included - rather than this file growing a
+	 * second, worse copy of property parsing. (Reading a schematic with the keys as they come back
+	 * silently resolves every block to air, which is how this was found: a house of 57,000 blocks
+	 * arrived with 3,500 of them and "minecraft:dirt" reported as a block the game does not have.)
 	 */
 	private static List<BlockState> palette(CompoundTag region, List<String> unknown) {
 		List<BlockState> out = new ArrayList<>();
@@ -218,8 +223,14 @@ public final class Litematic {
 				out.add(null);
 				continue;
 			}
-			BlockState state = NbtUtils.readBlockState(BuiltInRegistries.BLOCK, c);
 			String id = c.getStringOr("Name", "minecraft:air");
+			CompoundTag vanilla = new CompoundTag();
+			vanilla.putString("id", id);
+			CompoundTag props = c.getCompoundOrEmpty("Properties");
+			if (!props.isEmpty()) {
+				vanilla.put("properties", props);
+			}
+			BlockState state = NbtUtils.readBlockState(BuiltInRegistries.BLOCK, vanilla);
 			if (state.isAir() && !id.endsWith(":air") && !id.equals("air")) {
 				if (!unknown.contains(id)) {
 					unknown.add(id);

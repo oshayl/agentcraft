@@ -41,6 +41,8 @@ public final class SchematicHqBuilder implements HqBuilder {
 	/** Schematic HQs are built east of the studio, so trying one does not flatten the other. */
 	private static final int SITE_X = 60;
 	private static final int SITE_Z = -20;
+	/** Land around the build: room for the hills to rise and come back down (SchematicLandscape). */
+	private static final int MARGIN = 28;
 	/** A ceiling this close above means a cell is indoors rather than on a roof. */
 	private static final int CEILING = 8;
 
@@ -81,11 +83,14 @@ public final class SchematicHqBuilder implements HqBuilder {
 		// The schematic's own ground line sits on the meadow, so the build is not on a plinth.
 		int groundY = lit.grassLine() >= 0 ? lit.grassLine() : lit.lowestSolid();
 		int y0 = GROUND - groundY;
-		int[] site = {SITE_X, y0, SITE_Z, SITE_X + lit.sizeX - 1, y0 + lit.sizeY - 1, SITE_Z + lit.sizeZ - 1};
-		Plan p = new Plan(site[0], Math.min(site[1], GROUND - 4), site[2], site[3], Math.max(site[4], GROUND + 1), site[5], GROUND,
+		int[] site = {SITE_X - MARGIN, Math.min(y0, GROUND - 4), SITE_Z - MARGIN,
+			SITE_X + lit.sizeX - 1 + MARGIN, Math.max(y0 + lit.sizeY - 1, GROUND + 12), SITE_Z + lit.sizeZ - 1 + MARGIN};
+		Plan p = new Plan(site[0], site[1], site[2], site[3], site[4], site[5], GROUND,
 			y -> y > GROUND ? Blocks.AIR.defaultBlockState()
 				: y == GROUND ? Blocks.GRASS_BLOCK.defaultBlockState()
 				: y >= GROUND - 3 ? Blocks.DIRT.defaultBlockState() : Blocks.STONE.defaultBlockState());
+		// the land first, so the build always wins where the two meet
+		SchematicLandscape.shape(p, GROUND, new SchematicLandscape.Flat(SITE_X - 1, SITE_Z - 1, SITE_X + lit.sizeX, SITE_Z + lit.sizeZ));
 		for (int x = 0; x < lit.sizeX; x++) {
 			for (int y = 0; y < lit.sizeY; y++) {
 				for (int z = 0; z < lit.sizeZ; z++) {
@@ -95,6 +100,12 @@ public final class SchematicHqBuilder implements HqBuilder {
 		}
 
 		Floor floor = mainFloor(lit, y0);
+		// someone else's house becomes an office: one floor opened, fitted out, beds gone
+		SchematicFitOut.stripBedrooms(p, SITE_X, y0, SITE_Z, SITE_X + lit.sizeX - 1, y0 + lit.sizeY - 1, SITE_Z + lit.sizeZ - 1);
+		List<SchematicFitOut.Spot> ring = SchematicFitOut.open(p, floor.y, floor.minX - 2, floor.minZ - 2, floor.maxX + 2, floor.maxZ + 2);
+		SchematicFitOut.office(p, floor.y, ring);
+		// the stations go in while the plan is still being written, so they apply with everything else
+		java.util.Set<String> fitted = SchematicFitOut.furnish(p, a, ring, new ArrayList<>(Cast.ids()));
 		List<StationPlacements.Placement> placed = StationPlacements.load(level.getServer(), id);
 		for (StationPlacements.Placement s : placed) {
 			BlockState block = blockFor(s);
@@ -110,8 +121,8 @@ public final class SchematicHqBuilder implements HqBuilder {
 		Plan.Stats st = p.apply(level, previous, options.force());
 		PlanStore.save(level.getServer(), id, site, p.cells());
 
-		anchors(a, floor, placed);
-		a.bounds(site[0], floor.y - 1, site[2], site[3], floor.y + 16, site[5]);
+		anchors(a, floor, placed, fitted);
+		a.bounds(SITE_X, floor.y - 1, SITE_Z, SITE_X + lit.sizeX - 1, floor.y + 16, SITE_Z + lit.sizeZ - 1);
 
 		String unknown = lit.unknown.isEmpty() ? "" : ", " + lit.unknown.size() + " block(s) this version does not have were skipped ("
 			+ String.join(", ", lit.unknown.subList(0, Math.min(3, lit.unknown.size()))) + ")";
@@ -204,7 +215,7 @@ public final class SchematicHqBuilder implements HqBuilder {
 	 * the rest spread around the middle of the main room so nothing is missing and no two agents
 	 * stand inside each other.
 	 */
-	private void anchors(Anchors.Builder a, Floor floor, List<StationPlacements.Placement> placed) {
+	private void anchors(Anchors.Builder a, Floor floor, List<StationPlacements.Placement> placed, java.util.Set<String> fitted) {
 		List<String> ids = new ArrayList<>(Cast.ids());
 		List<String> wanted = new ArrayList<>();
 		for (String agent : ids) {
@@ -220,6 +231,8 @@ public final class SchematicHqBuilder implements HqBuilder {
 			wanted.add(AnchorNames.slot(s, 2));
 		}
 
+		// the fit-out already wrote these against the walls; a hand placement wins over them
+		wanted.removeAll(fitted);
 		for (StationPlacements.Placement s : placed) {
 			a.put(s.anchor(), s.standX(), s.y(), s.standZ(), s.standYaw(), 0);
 			wanted.remove(s.anchor());
