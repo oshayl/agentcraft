@@ -700,6 +700,22 @@ export class Foreman {
           try {
             if (msg.action === 'report') {
               for (const l of await this.repos.fixReport(r.id)) lines.push(`${label}${l}`);
+            } else if (msg.action === 'aside') {
+              // the way out of a merge already waiting on the board: git refuses to overwrite
+              // files it has no record of, and this moves exactly those out of its way
+              const open = this.decisions.open().filter((d) => d.kind === 'merge' && d.repoId === r.id && d.worktree);
+              if (!open.length) {
+                lines.push(`${label}no merge is waiting on this repo`);
+              } else {
+                for (const d of open) {
+                  const aside = await this.repos.setAsideUntracked(r.id, d.worktree!);
+                  lines.push(
+                    aside.files.length
+                      ? `${label}${d.id}: moved ${aside.files.length} file(s) to ${aside.dir} - answer the merge now`
+                      : `${label}${d.id}: nothing of yours is in the way`,
+                  );
+                }
+              }
             } else if (msg.action === 'review') {
               for (const l of formatUncommittedReview(await this.repos.uncommittedReview(r.id))) lines.push(`${label}${l}`);
             } else {

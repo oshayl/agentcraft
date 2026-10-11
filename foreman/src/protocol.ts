@@ -437,9 +437,9 @@ export const RepoAddMsg = z.object({ ...envelope('repo.add'), path: z.string().m
 export const RepoFixMsg = z.object({
   ...envelope('repo.fix'),
   action: z
-    .enum(['report', 'park', 'unpark', 'deps', 'review', 'land'])
+    .enum(['report', 'park', 'unpark', 'deps', 'review', 'land', 'aside'])
     .describe(
-      'report: what currently blocks work in each repo. review: the uncommitted work in the base checkout (files, +/-, diff), so it can be read instead of only blocking. land: commit those modified tracked files under your own message. park: the same commit under an anonymous checkpoint subject, undoable with unpark (untracked files are left alone by all three; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout\'s node_modules into worktrees missing it, for sandboxes with no network',
+      'report: what currently blocks work in each repo. review: the uncommitted work in the base checkout (files, +/-, diff), so it can be read instead of only blocking. land: commit those modified tracked files under your own message. park: the same commit under an anonymous checkpoint subject, undoable with unpark (untracked files are left alone by all three; they never block). unpark: undo that checkpoint, refused once anything else is on top. deps: copy the base checkout\'s node_modules into worktrees missing it, for sandboxes with no network. aside: move the files you have uncommitted that an open merge would overwrite into .agentcraft-superseded/<when>/, so that merge can land',
     ),
   repoId: Id.optional().describe('the repo to act on; omitted = every registered repo'),
   message: z.string().max(2000).optional().describe('land: the commit message for your own uncommitted work'),

@@ -129,7 +129,7 @@ public final class ConsoleCommands {
 		new Command("task", "/task <id> unblock <answer>|cancel|retry|prioritize|reassign", "steer a task, or answer what blocked it"),
 		new Command("repo", "/repo add <path>", "register a local git repo"),
 		new Command("repos", "/repos", "list repos"),
-		new Command("fix", "/fix [review|land|park|unpark|deps] [repo]", "review or clear what is blocking work"),
+		new Command("fix", "/fix [review|land|aside|park|unpark|deps] [repo]", "review or clear what is blocking work"),
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
 		new Command("artifacts", "/artifacts [id]", "what the team finished, with its open items"),
@@ -369,20 +369,21 @@ public final class ConsoleCommands {
 		return new Notes(source, query.isEmpty() ? null : query);
 	}
 
-	private static final List<String> FIX_ACTIONS = List.of("report", "review", "land", "park", "unpark", "deps");
+	private static final List<String> FIX_ACTIONS = List.of("report", "review", "land", "aside", "park", "unpark", "deps");
 	private static final java.util.Map<String, String> FIX_HINTS = java.util.Map.of(
 		"report", "what is blocking work right now",
 		"review", "read your own uncommitted changes (files, +/-, diff)",
 		"land", "commit your uncommitted changes so a merge can land",
 		"park", "the same, as an undoable checkpoint",
 		"unpark", "undo the last checkpoint",
-		"deps", "give worktrees the dependencies they are missing");
+		"deps", "give worktrees the dependencies they are missing",
+		"aside", "move your uncommitted copies out of a waiting merge's way");
 
 	/** {@code /fix}, {@code /fix park}, {@code /fix deps betterfiles}. Bare /fix reports. */
 	private static Intent parseFix(List<String> args, ForemanState s) {
 		String action = args.isEmpty() ? "report" : args.get(0).toLowerCase(Locale.ROOT);
 		if (!FIX_ACTIONS.contains(action)) {
-			return new Invalid("usage: /fix [review|land|park|unpark|deps] [repo] (bare /fix reports what is blocking)");
+			return new Invalid("usage: /fix [review|land|aside|park|unpark|deps] [repo] (bare /fix reports what is blocking)");
 		}
 		if (args.size() < 2) {
 			return new RepoFix(action, null);

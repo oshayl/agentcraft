@@ -808,9 +808,19 @@ export class RepoManager {
     const w = this.requireWorktree(repoId, worktreeId);
     const target = await this.checkoutOf(r, w.base);
     if (!target) return [];
+    // What this branch will bring: what it has already committed, AND what the agent has left
+    // uncommitted in its worktree - because the Foreman commits that as the first step of the
+    // merge. Asking only about the commits answers the question too early: when the decision is
+    // written the agent's files are usually still uncommitted, the collision looks like nothing,
+    // and the option that handles it is never offered.
     const incoming = new Set(
       (await gitOut(r.path, ['diff', '--name-only', `${w.base}...${w.branch}`])).split('\n').map((l) => l.trim()).filter(Boolean),
     );
+    const pending = (await git(w.path, ['status', '--porcelain', '--untracked-files=all'], { allowFail: true })).stdout.split('\n');
+    for (const line of pending) {
+      const m = /^..\s+(?:.+ -> )?(.+)$/.exec(line);
+      if (m?.[1]) incoming.add(m[1].trim().replace(/^"|"$/g, ''));
+    }
     if (!incoming.size) return [];
     const untracked = (await git(target, ['ls-files', '--others', '--exclude-standard'], { allowFail: true })).stdout
       .split('\n')
