@@ -455,7 +455,7 @@ public final class ForemanLink {
 		pendingLibrary.put(requestId, raw);
 		raw.orTimeout(ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS).whenComplete((d, e) -> pendingLibrary.remove(requestId));
 		send(ForemanJson.msg("library.request").put("requestId", requestId).put("source", source).put("note", noteId).put("query", query)
-			.put("limit", limit == null ? null : String.valueOf(limit)).json())
+			.put("limit", limit).json())
 			.whenComplete((ack, err) -> {
 				if (err != null) {
 					raw.completeExceptionally(err);

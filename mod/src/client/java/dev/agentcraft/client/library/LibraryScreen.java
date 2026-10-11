@@ -319,7 +319,7 @@ public final class LibraryScreen extends Screen {
 			boolean active = sc.equals(scope);
 			String label = MemoryIndex.scopeLabel(sc);
 			String count = String.valueOf(MemoryIndex.count(sc));
-			boolean agent = !sc.isEmpty() && !sc.equals("shared");
+			boolean agent = !sc.isEmpty() && !sc.equals("shared") && !sc.equals(MemoryIndex.ARTIFACTS) && !FileNotes.isSource(sc);
 			int w = 12 + (agent ? 11 : 0) + font.width(label) + 5 + font.width(count);
 			if (x + w > ix + iw) {
 				break;

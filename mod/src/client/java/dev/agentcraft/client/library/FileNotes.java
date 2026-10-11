@@ -34,7 +34,10 @@ public final class FileNotes {
 	private static final Map<String, String> BODIES = new HashMap<>();
 	private static final Set<String> LOADING = new HashSet<>();
 	private static final Map<String, String> ERRORS = new HashMap<>();
+	private static final Map<String, Long> RETRY_AFTER = new HashMap<>();
 	private static long revision;
+	/** A failed index is retried this long after, so a Foreman restart fixes the tab by itself. */
+	private static final long RETRY_MS = 5_000;
 
 	private FileNotes() {
 	}
@@ -77,6 +80,13 @@ public final class FileNotes {
 		if (have == null) {
 			requestIndex(sourceId, QUERY.get(sourceId));
 			return List.of();
+		}
+		// an index that failed is worth asking for again in a moment: the Foreman may have been
+		// restarting, and a tab stuck on an old error would need the whole game restarted
+		Long retry = RETRY_AFTER.get(sourceId);
+		if (retry != null && System.currentTimeMillis() >= retry) {
+			RETRY_AFTER.remove(sourceId);
+			requestIndex(sourceId, QUERY.get(sourceId));
 		}
 		return have;
 	}
@@ -138,17 +148,15 @@ public final class FileNotes {
 			LOADING.remove("index:" + sourceId);
 			LOADING.remove(sourceId);
 			revision++;
-			if (err != null || lib == null) {
-				ERRORS.put(sourceId, err == null ? "no answer" : String.valueOf(err.getMessage()));
+			if (err != null || lib == null || lib.error() != null) {
+				String why = err != null ? String.valueOf(err.getMessage()) : lib == null ? "no answer" : lib.error();
+				ERRORS.put(sourceId, why);
 				INDEX.put(sourceId, List.of());
-				return;
-			}
-			if (lib.error() != null) {
-				ERRORS.put(sourceId, lib.error());
-				INDEX.put(sourceId, List.of());
+				RETRY_AFTER.put(sourceId, System.currentTimeMillis() + RETRY_MS);
 				return;
 			}
 			ERRORS.remove(sourceId);
+			RETRY_AFTER.remove(sourceId);
 			List<MemoryEntry> out = new ArrayList<>();
 			for (LibraryItem it : lib.items()) {
 				out.add(toEntry(sourceId, it));
