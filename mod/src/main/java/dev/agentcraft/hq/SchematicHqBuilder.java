@@ -107,6 +107,7 @@ public final class SchematicHqBuilder implements HqBuilder {
 		int[] b = lit.building(groundY);
 		java.util.Set<String> fitted = new java.util.LinkedHashSet<>();
 		Penthouse.Room room = null;
+		String stairFault = null;
 		if (b != null) {
 			room = Penthouse.build(p, y0 + b[4], SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3]);
 			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()));
@@ -116,6 +117,7 @@ public final class SchematicHqBuilder implements HqBuilder {
 			int poolDeck = Amenities.poolside(p, a, SITE_X, SITE_Z, SITE_X + lit.sizeX - 1, SITE_Z + lit.sizeZ - 1, GROUND - 1);
 			int bottom = poolDeck > 0 ? poolDeck : GROUND + 1;
 			Penthouse.spiral(p, tx, tz, bottom, room.y());
+			stairFault = Penthouse.check(p, tx, tz, bottom, room.y());
 			if (poolDeck > 0) {
 				Amenities.passage(p, tx - 2, tz, SITE_X + b[2], poolDeck);
 			}
@@ -147,7 +149,8 @@ public final class SchematicHqBuilder implements HqBuilder {
 			+ String.join(", ", lit.unknown.subList(0, Math.min(3, lit.unknown.size()))) + ")";
 		return "\"" + lit.name + "\" by " + lit.author + ": " + lit.sizeX + "x" + lit.sizeY + "x" + lit.sizeZ + ", " + st.changed()
 			+ " blocks placed. Main floor y=" + floor.y + ", " + placed.size() + " station(s) placed"
-			+ (placed.isEmpty() ? "" : ", " + placed.size() + " placed by hand") + swapped + unknown;
+			+ (placed.isEmpty() ? "" : ", " + placed.size() + " placed by hand")
+			+ (stairFault == null ? ", the stair walks from bottom to top" : ", BUT " + stairFault) + swapped + unknown;
 	}
 
 	/** The station block a placement asks for (null: anchor only, nothing to place). */

@@ -14,6 +14,7 @@ import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The work floor, as a glass storey added on top of an imported build.
@@ -120,46 +121,111 @@ final class Penthouse {
 		int r = 2;
 		shaft(p, cx, cz, r, bottom, top);
 
-		// Where the stair has to arrive level: every height beside the tower you could stand on,
-		// which is this building's floors, plus the two ends.
+		// Where the stair has to arrive level: every height beside the tower you could stand on -
+		// this building's floors - plus the two ends. Floors closer together than four blocks are
+		// dropped: a flight shorter than that puts two treads in one column within a block of
+		// each other, and then neither can be stood on.
 		java.util.List<Integer> floors = new java.util.ArrayList<>();
 		floors.add(bottom);
 		int wx = cx - r - 1;
-		for (int y = bottom + 2; y <= top - 2; y++) {
-			if (!p.get(wx, y - 1, cz).isAir() && p.get(wx, y, cz).isAir() && p.get(wx, y + 1, cz).isAir()) {
+		for (int y = bottom + 4; y <= top - 4; y++) {
+			if (!p.get(wx, y - 1, cz).isAir() && p.get(wx, y, cz).isAir() && p.get(wx, y + 1, cz).isAir()
+				&& y - floors.get(floors.size() - 1) >= 4) {
 				floors.add(y);
 			}
 		}
+		if (top - floors.get(floors.size() - 1) < 4) {
+			floors.remove(floors.size() - 1);
+		}
 		floors.add(top);
 
-		// Round the newel a block at a time, and when the next tread would reach a floor, keep
-		// going flat until the west side comes round - so the landing is always the cell the
-		// doorway opens onto. Eight treads is eight heights, so without this the stair arrives
-		// at a floor somewhere round the back and the door opens onto a drop.
 		int[][] ring = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
 		Direction[] facing = {Direction.EAST, Direction.SOUTH, Direction.SOUTH, Direction.WEST, Direction.WEST, Direction.NORTH,
 			Direction.NORTH, Direction.EAST};
-		int west = 6; // ring index of the cell the doorway opens onto
-		int i = 0;
-		int y = bottom;
-		for (int floor : floors) {
-			while (y < floor) {
-				tread(p, cx, cz, ring[i % 8], y - 1, facing[i % 8]);
-				i++;
-				y++;
+		int west = 6; // the cell the doorways open onto
+		int i = west;
+		landing(p, cx, cz, r, floors.get(0));
+		for (int f = 1; f < floors.size(); f++) {
+			int from = floors.get(f - 1);
+			int to = floors.get(f);
+			int climb = to - from;
+			// A whole number of turns per flight, so every landing comes back round to the west
+			// cell. The rise is spread over the turn rather than taken a block at a time: an
+			// eight-cell turn that climbs less than eight has to go flat somewhere, and doing
+			// that all in one place is what made the stair meet itself and dead-end.
+			int turns = Math.max(1, (climb + 7) / 8);
+			int cells = turns * 8;
+			int y = from;
+			for (int k = 0; k < cells; k++) {
+				int risen = (k + 1) * climb / cells;
+				int next = from + risen;
+				i = (i + 1) % 8;
+				if (k == cells - 1) {
+					break; // the last cell of the flight is the landing itself
+				}
+				tread(p, cx, cz, ring[i], next - 1, facing[i]);
+				y = next;
 			}
-			// flat round to the west cell, then the landing itself
-			int guard = 0;
-			while (i % 8 != west && guard++ < 8) {
-				tread(p, cx, cz, ring[i % 8], y - 1, facing[i % 8]);
-				i++;
-			}
-			landing(p, cx, cz, r, y);
-			i++;
+			landing(p, cx, cz, r, to);
+			i = west;
 		}
 		for (int yy = bottom - 2; yy <= top + 1; yy++) {
 			p.set(cx, yy, cz, TRIM);
 		}
+	}
+
+	/**
+	 * Walks the finished stair the way an agent would and says where it breaks, or null when it
+	 * goes all the way up. Three rebuilds in a row left a stair that looked right and dead-ended
+	 * a few steps in, so the build checks its own work: for every height there has to be one
+	 * cell you can stand in, and the next one up has to be beside it.
+	 */
+	static @Nullable String check(Plan p, int cx, int cz, int bottom, int top) {
+		int[][] ring = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+		// every place in the well you could stand, as (ring index, height)
+		java.util.Set<Long> stand = new java.util.HashSet<>();
+		for (int i = 0; i < ring.length; i++) {
+			int x = cx + ring[i][0];
+			int z = cz + ring[i][1];
+			for (int y = bottom; y <= top + 1; y++) {
+				if (!p.get(x, y - 1, z).isAir() && p.get(x, y, z).isAir() && p.get(x, y + 1, z).isAir()) {
+					stand.add(((long) i << 32) | (y & 0xffffffffL));
+				}
+			}
+		}
+		// walk from the bottom the way an agent would: a neighbouring cell, at most a block up
+		java.util.ArrayDeque<Long> queue = new java.util.ArrayDeque<>();
+		java.util.Set<Long> seen = new java.util.HashSet<>();
+		int highest = -1;
+		for (long k : stand) {
+			if ((int) (k & 0xffffffffL) == bottom) {
+				queue.add(k);
+				seen.add(k);
+			}
+		}
+		if (queue.isEmpty()) {
+			return "the stair has no bottom step at y=" + bottom;
+		}
+		while (!queue.isEmpty()) {
+			long k = queue.poll();
+			int i = (int) (k >> 32);
+			int y = (int) (k & 0xffffffffL);
+			highest = Math.max(highest, y);
+			for (int d = -1; d <= 1; d += 2) {
+				int j = Math.floorMod(i + d, ring.length);
+				// the ring's cells are orthogonally adjacent in sequence; the corners are not
+				if (Math.abs(ring[j][0] - ring[i][0]) + Math.abs(ring[j][1] - ring[i][1]) != 1) {
+					continue;
+				}
+				for (int dy = -1; dy <= 1; dy++) {
+					long next = ((long) j << 32) | ((y + dy) & 0xffffffffL);
+					if (stand.contains(next) && seen.add(next)) {
+						queue.add(next);
+					}
+				}
+			}
+		}
+		return highest >= top ? null : "the stair stops at y=" + highest + " and the top is y=" + top;
 	}
 
 	/** The glass well the stair winds up, open inside and walled outside. */
@@ -186,23 +252,24 @@ final class Penthouse {
 	}
 
 	/**
-	 * A floor-level landing: the west cell and its two neighbours are solid at {@code y - 1}, the
-	 * doorway through the wall beside them is open, and there is headroom over all of it.
+	 * A floor-level landing: one cell, and the doorway beside it.
+	 *
+	 * <p>Only the west cell is touched, and that is the point. The ring comes back to each
+	 * column every eight treads, so a landing that also tidied its neighbours - levelling them,
+	 * clearing headroom over them - deleted the treads those columns hold on the turn above, and
+	 * the stair ended in a dead end a few steps up. Twice. The landing is the tread the stair
+	 * already arrived on, made a full block so it reads as a floor rather than a step.
 	 */
 	private static void landing(Plan p, int cx, int cz, int r, int y) {
-		for (int dz = -1; dz <= 1; dz++) {
-			p.set(cx - 1, y - 1, cz + dz, TRIM);
-			for (int h = 0; h <= 2; h++) {
-				p.set(cx - 1, y + h, cz + dz, Blocks.AIR.defaultBlockState());
-			}
+		p.set(cx - 1, y - 1, cz, TRIM);
+		for (int h = 0; h <= 2; h++) {
+			p.set(cx - 1, y + h, cz, Blocks.AIR.defaultBlockState());
 		}
-		// through the wall, two high and two wide: a doorway rather than a gap
+		// through the wall: two high, with a sill you step out onto
 		for (int h = 0; h <= 1; h++) {
 			p.set(cx - r, y + h, cz, Blocks.AIR.defaultBlockState());
-			p.set(cx - r, y + h, cz - 1, Blocks.AIR.defaultBlockState());
 		}
 		p.set(cx - r, y - 1, cz, TRIM);
-		p.set(cx - r, y - 1, cz - 1, TRIM);
 	}
 
 	/**
