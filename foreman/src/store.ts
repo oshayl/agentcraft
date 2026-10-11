@@ -59,6 +59,10 @@ export interface StateData {
   sessions: Record<string, SessionRecord>;
   worktreeMeta: Record<string, WorktreeMeta>; // key: `${repoId}/${worktreeId}`
   permissionRules: Record<string, string[]>; // agentId -> rule keys always allowed
+  /** 'ask' (default): every ask-verdict becomes an in-game prompt. 'auto': ask-verdicts are
+   *  allowed without asking. Hard denials (pushes, git network, env -i) are refused in BOTH
+   *  modes, and merges are never auto-answered: they are not permission decisions. */
+  permissionMode: 'ask' | 'auto';
   /** opaque backend-owned state (e.g. sim progress) */
   backend: Record<string, unknown>;
 }
@@ -106,6 +110,7 @@ function emptyState(now: number): StateData {
     sessions: {},
     worktreeMeta: {},
     permissionRules: {},
+    permissionMode: 'ask',
     backend: {},
   };
 }

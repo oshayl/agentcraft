@@ -71,7 +71,12 @@ public final class ConnectionBanner implements HudElement {
 			if (fs != null && fs.backend() != BackendName.SIM && fs.account() != null) {
 				detail = fs.account();
 			}
-			if (now - link.sinceMs() > FADE_AFTER_MS) {
+			// A safety-relevant mode must never be invisible: say so, and keep the pill at full
+			// opacity instead of letting it fade out like the ordinary connected state.
+			if (fs != null && fs.permissionsAuto()) {
+				detail = (detail == null ? "" : detail + " · ") + "permissions: auto";
+			}
+			if (now - link.sinceMs() > FADE_AFTER_MS && !(fs != null && fs.permissionsAuto())) {
 				alpha = 150;
 			}
 		} else if (link.everSynced()) {

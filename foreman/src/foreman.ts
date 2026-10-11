@@ -24,8 +24,7 @@ import type {
   LogKind,
   Outbound,
   Station,
-  Task,
-} from './protocol.js';
+  Task, PermissionMode,} from './protocol.js';
 import { RepoError, RepoManager } from './repos.js';
 import { Store } from './store.js';
 import { TaskError, TaskGraph } from './taskgraph.js';
@@ -104,6 +103,7 @@ export class Foreman {
     this.log.debug(`cast from ${source}`);
     setUserName(opts.config.userName);
     this.status = { version: FOREMAN_VERSION, backend: opts.config.backend, auth: opts.config.backend === 'sim' ? 'ok' : 'unknown', userName: userName() };
+    this.status.permissionMode = this.store.data.permissionMode ?? 'ask';
     if (opts.config.backend === 'sim') this.status.message = 'Simulated team (sim backend)';
     this.initRoster();
     this.decisions.onCreated((d) => this.onDecisionCreated(d));
@@ -452,6 +452,24 @@ export class Foreman {
 
   // ---- foreman status -------------------------------------------------------------------------
 
+  /** How ask-verdicts are handled. Hard denials and merges are unaffected by this. */
+  permissionMode(): PermissionMode {
+    return this.store.data.permissionMode ?? 'ask';
+  }
+
+  setPermissionMode(mode: PermissionMode): void {
+    if (this.store.data.permissionMode === mode) return;
+    this.store.data.permissionMode = mode;
+    this.store.markDirty();
+    this.setStatus({ permissionMode: mode });
+    this.bus.feed(
+      'system',
+      mode === 'auto'
+        ? 'Permissions: auto. Agents no longer wait for you on permission prompts. Pushes and other hard denials are still refused, and merges still need you.'
+        : 'Permissions: ask. Every permission prompt comes to you again.',
+    );
+  }
+
   setStatus(patch: Partial<ForemanStatus>): void {
     const next = { ...this.status, ...patch };
     if (JSON.stringify(next) === JSON.stringify(this.status)) return;
@@ -537,6 +555,11 @@ export class Foreman {
         const r = await this.repos.add(msg.path);
         this.bus.feed('system', `Repo connected: ${r.name} (${r.branch})`);
         return { repoId: r.id };
+      }
+      case 'permissions.set': {
+        const mode = msg.mode ?? (this.permissionMode() === 'ask' ? 'auto' : 'ask');
+        this.setPermissionMode(mode);
+        return { mode };
       }
       case 'repo.fix': {
         const targets = msg.repoId ? [this.repos.require(msg.repoId)] : this.repos.list();

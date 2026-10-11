@@ -187,6 +187,7 @@ Exact option labels: merge decisions use `Merge`, `Request changes`, `Reject`; p
 | `showcase` | boolean | no | sim: holding a static showcase state (`--showcase` or `--showcase late`) |
 | `costUsd` | number | no | claude: estimated spend of this profile (sum over all sessions, survives restarts) |
 | `userName` | string | no | the person the team works for, as the agents address them (UI: "<name> answered") |
+| `permissionMode` | `ask` \| `auto` | no | 'ask' (default) prompts for every ask-verdict; 'auto' allows them without asking. Hard denials are refused in both, and merges always wait for the user. |
 
 ### <a id="agentlogs"></a>AgentLogs
 
@@ -1025,6 +1026,24 @@ Register a local git repo (console: `/repo add <path>`).
   "type": "repo.add",
   "id": "c18",
   "path": "C:\\Projects\\agentcraft\\sandbox\\demo-app"
+}
+```
+
+### `permissions.set`
+
+Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-game key). Never affects hard denials or merges.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `mode` | `ask` \| `auto` | no | omitted = cycle to the next mode |
+
+```json
+{
+  "v": 1,
+  "type": "permissions.set",
+  "id": "c20",
+  "mode": "auto"
 }
 ```
 

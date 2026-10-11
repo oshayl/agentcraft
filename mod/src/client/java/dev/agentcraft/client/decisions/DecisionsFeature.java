@@ -63,6 +63,12 @@ public final class DecisionsFeature {
 					openQueue(null, null);
 				}
 			}
+			// Cycle ask <-> auto. Only in the world, so it cannot fire while typing in a screen.
+			while (Keys.permissions.consumeClick()) {
+				if (mc.gui.screen() == null) {
+					Foreman.setPermissions(null);
+				}
+			}
 		}));
 		Foreman.addListener(new ForemanListener() {
 			@Override

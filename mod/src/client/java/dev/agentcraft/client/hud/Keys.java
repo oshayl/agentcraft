@@ -8,13 +8,14 @@ import net.minecraft.client.input.KeyEvent;
 
 /**
  * AgentCraft key mappings (Options > Controls > Key Binds > AgentCraft, rebindable like any vanilla
- * key): the console ({@code `}), the console from a terminal you look at (Enter) and the decision
- * queue ({@code J}). Registered once, from whichever feature initialises first.
+ * key): the console ({@code `}), the console from a terminal you look at (Enter), the decision
+ * queue ({@code J}) and the permission mode toggle ({@code K}). Registered once, from whichever feature initialises first.
  */
 public final class Keys {
 	public static KeyMapping console;
 	public static KeyMapping terminal;
 	public static KeyMapping decisions;
+	public static KeyMapping permissions;
 	private static boolean registered;
 
 	private Keys() {
@@ -38,6 +39,8 @@ public final class Keys {
 			InputConstants.KEY_RETURN, cat, 2));
 		decisions = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.agentcraft.decisions", InputConstants.Type.KEYBOARD, InputConstants.KEY_J, cat,
 			3));
+		permissions = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.agentcraft.permissions", InputConstants.Type.KEYBOARD, InputConstants.KEY_K,
+			cat, 4));
 	}
 
 	/**

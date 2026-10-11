@@ -211,6 +211,9 @@ export const FeedItem = z.object({
 });
 export type FeedItem = z.infer<typeof FeedItem>;
 
+export const PermissionMode = z.enum(['ask', 'auto']);
+export type PermissionMode = z.infer<typeof PermissionMode>;
+
 export const ForemanStatus = z.object({
   version: z.string(),
   backend: BackendName,
@@ -221,6 +224,9 @@ export const ForemanStatus = z.object({
   showcase: z.boolean().optional().describe('sim: holding a static showcase state (`--showcase` or `--showcase late`)'),
   costUsd: z.number().optional().describe('claude: estimated spend of this profile (sum over all sessions, survives restarts)'),
   userName: z.string().optional().describe('the person the team works for, as the agents address them (UI: "<name> answered")'),
+  permissionMode: PermissionMode.optional().describe(
+    "'ask' (default) prompts for every ask-verdict; 'auto' allows them without asking. Hard denials are refused in both, and merges always wait for the user.",
+  ),
 });
 export type ForemanStatus = z.infer<typeof ForemanStatus>;
 
@@ -408,6 +414,11 @@ export const RepoFixMsg = z.object({
   repoId: Id.optional().describe('the repo to act on; omitted = every registered repo'),
 });
 
+export const PermissionModeSetMsg = z.object({
+  ...envelope('permissions.set'),
+  mode: PermissionMode.optional().describe('omitted = cycle to the next mode'),
+});
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMsg,
   GoalSubmitMsg,
@@ -418,6 +429,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   DiffRequestMsg,
   RepoAddMsg,
   RepoFixMsg,
+  PermissionModeSetMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -491,6 +503,10 @@ export const CLIENT_MESSAGES = {
   'agent.action': { schema: AgentActionMsg, doc: 'Pause/resume/stop an agent, or spawn (activate) an off-shift worker.' },
   'diff.request': { schema: DiffRequestMsg, doc: 'Ask for the structured diff of a worktree. Answered with `diff` (same requestId).' },
   'repo.add': { schema: RepoAddMsg, doc: 'Register a local git repo (console: `/repo add <path>`).' },
+  'permissions.set': {
+    schema: PermissionModeSetMsg,
+    doc: 'Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-game key). Never affects hard denials or merges.',
+  },
   'repo.fix': {
     schema: RepoFixMsg,
     doc: 'Clear what is blocking work, from the console (`/fix [park|unpark|deps] [repo]`), without leaving the game. Answered with `{lines}`, one per repo acted on, which are also written to the feed.',

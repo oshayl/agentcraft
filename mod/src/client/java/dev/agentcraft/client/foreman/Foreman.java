@@ -88,6 +88,11 @@ public final class Foreman {
 		return link.send(ForemanJson.msg("repo.fix").put("action", action).put("repoId", repoId).json());
 	}
 
+	/** {@code mode}: "ask" | "auto", or null to cycle. */
+	public static CompletableFuture<Ack> setPermissions(@Nullable String mode) {
+		return link.send(ForemanJson.msg("permissions.set").put("mode", mode).json());
+	}
+
 	/** Structured diff of a worktree (or an agent id: its current worktree) vs its base. */
 	public static CompletableFuture<Diff> requestDiff(String repoId, String worktree) {
 		return link.requestDiff(repoId, worktree);

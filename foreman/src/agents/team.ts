@@ -696,6 +696,13 @@ export class TeamBackend implements Backend {
         }
         return { allow: false, message: verdict.reason };
       }
+      // 'auto' skips the prompt for ask-verdicts only. Everything above has already returned:
+      // a hard denial is still a denial here, and merges never reach this gate at all, so the
+      // guarantee that nothing lands in the user's checkout without their click is untouched.
+      if (this.fm.permissionMode() === 'auto') {
+        this.fm.agentLog(agentId, 'tool', `auto-allowed: ${describeToolCall(toolName, input)} (permissions: auto)`);
+        return { allow: true };
+      }
       const prev = this.fm.agent(agentId);
       const prevState = prev ? { state: prev.state, station: prev.station, activity: prev.activity } : undefined;
       const t = prev?.taskId;

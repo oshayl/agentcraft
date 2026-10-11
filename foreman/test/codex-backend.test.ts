@@ -241,6 +241,43 @@ describe('codex engine (fake app-server)', () => {
     }
   });
 
+  // The toggle must only ever skip the asking. If it could also wave through a hard denial, the
+  // "nothing is ever pushed" guarantee would depend on a UI setting.
+  it('permissions auto skips prompts but still refuses hard denials', async () => {
+    const isolatedHome = tempDir();
+    const isolatedRepo = await demoRepo();
+    const isolated = makeForeman(isolatedHome, ['--backend', 'sim']);
+    try {
+      const repo = await isolated.fm.repos.add(isolatedRepo);
+      const task = isolated.fm.tasks.create({ title: 'auto', createdBy: 'marlow', repoId: repo.id, assignee: 'kit' });
+      const wt = await isolated.fm.repos.createWorktree(repo.id, 'kit', task);
+      task.worktree = wt.id;
+      const engine = new CodexEngine(isolated.fm, isolated.cfg.codex);
+      const backend = new TeamBackend(isolated.fm, isolated.cfg.claude, { name: 'codex', engines: { lead: engine, worker: engine } });
+      const turn = { signal: new AbortController().signal } as never;
+      const gate = backend['permissionGate']('kit', 'worker', wt.path, turn);
+      const sig = () => new AbortController().signal;
+
+      expect(isolated.fm.permissionMode()).toBe('ask');
+      isolated.fm.setPermissionMode('auto');
+      expect(isolated.fm.status.permissionMode).toBe('auto');
+
+      // an ask-verdict (writing outside the worktree) now goes through without a decision
+      const outside = path.join(isolatedHome, 'outside.txt');
+      expect((await gate('Write', { file_path: outside }, sig(), undefined)).allow).toBe(true);
+      expect(isolated.fm.decisions.open()).toHaveLength(0);
+
+      // a hard denial is still refused, in auto exactly as in ask
+      expect((await gate('Bash', { command: 'git push origin main' }, sig(), undefined)).allow).toBe(false);
+      expect((await gate('Bash', { command: 'env -i npm test' }, sig(), undefined)).allow).toBe(false);
+
+      isolated.fm.setPermissionMode('ask');
+      expect(isolated.fm.permissionMode()).toBe('ask');
+    } finally {
+      await isolated.fm.close();
+    }
+  });
+
   it('refuses Git write grants when the worktree pointer names another worktree', async () => {
     const isolatedHome = tempDir();
     const isolatedRepo = await demoRepo();

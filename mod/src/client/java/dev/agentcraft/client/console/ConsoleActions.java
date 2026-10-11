@@ -12,6 +12,7 @@ import dev.agentcraft.client.console.ConsoleCommands.Intent;
 import dev.agentcraft.client.console.ConsoleCommands.Invalid;
 import dev.agentcraft.client.console.ConsoleCommands.Message;
 import dev.agentcraft.client.console.ConsoleCommands.RepoAdd;
+import dev.agentcraft.client.console.ConsoleCommands.Permissions;
 import dev.agentcraft.client.console.ConsoleCommands.RepoFix;
 import dev.agentcraft.client.console.ConsoleCommands.Repos;
 import dev.agentcraft.client.console.ConsoleCommands.ShowDiff;
@@ -200,6 +201,12 @@ public final class ConsoleActions {
 				String rid = ack.result() != null && ack.result().has("repoId") ? ack.result().get("repoId").getAsString() : null;
 				return "repo " + (rid != null ? rid + " " : "") + "added " + UiBits.CHECK;
 			}, "adding the repo\u2026");
+			case Permissions p -> track(Foreman.setPermissions(p.mode()), raw, restore, ack -> {
+				String m = ack.result() != null && ack.result().has("mode") ? ack.result().get("mode").getAsString() : "?";
+				return m.equals("auto")
+					? "permissions: auto \u00b7 prompts are allowed automatically; merges still need you"
+					: "permissions: ask \u00b7 every prompt comes to you " + UiBits.CHECK;
+			}, "switching\u2026");
 			case RepoFix f -> track(Foreman.fixRepo(f.action(), f.repoId()), raw, restore, ack -> {
 				// the Foreman also feeds each line; this is the inline acknowledgement
 				if (ack.result() != null && ack.result().has("lines")) {

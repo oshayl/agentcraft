@@ -194,4 +194,5 @@ export const CLIENT_EXAMPLES: Ex<ClientMessage> = {
   'diff.request': { v: 1, type: 'diff.request', id: 'c17', requestId: 'r7', repoId: 'demo-app', worktree: 'kit-t2' },
   'repo.add': { v: 1, type: 'repo.add', id: 'c18', path: 'C:\\Projects\\agentcraft\\sandbox\\demo-app' },
   'repo.fix': { v: 1, type: 'repo.fix', id: 'c19', action: 'park', repoId: 'demo-app' },
+  'permissions.set': { v: 1, type: 'permissions.set', id: 'c20', mode: 'auto' },
 };

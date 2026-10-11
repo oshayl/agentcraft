@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -60,6 +60,10 @@ public final class ConsoleCommands {
 
 	/** {@code action}: report | park | unpark | deps. {@code repoId} null = every registered repo. */
 	public record RepoFix(String action, @Nullable String repoId) implements Intent {
+	}
+
+	/** {@code mode}: "ask" | "auto", or null to cycle. */
+	public record Permissions(@Nullable String mode) implements Intent {
 	}
 
 	public record Repos() implements Intent {
@@ -111,6 +115,7 @@ public final class ConsoleCommands {
 		new Command("repo", "/repo add <path>", "register a local git repo"),
 		new Command("repos", "/repos", "list repos"),
 		new Command("fix", "/fix [park|unpark|deps] [repo]", "clear what is blocking work"),
+		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("status", "/status", "goal, agents, tasks and decisions"),
 		new Command("sound", "/sound on|off", "decision bell and done chime"),
 		new Command("clear", "/clear", "clear the console's own lines"),
@@ -184,6 +189,7 @@ public final class ConsoleCommands {
 			case "repo" -> parseRepo(rest, args);
 			case "repos" -> new Repos();
 			case "fix" -> parseFix(args, s);
+			case "permissions", "perms" -> parsePermissions(args);
 			case "pause", "resume", "stop", "spawn" -> parseAgentAction(cmd, args, s);
 			case "task", "t" -> parseTask(args, s);
 			case "diff" -> parseDiff(args, s);
@@ -230,6 +236,17 @@ public final class ConsoleCommands {
 			return new Invalid("usage: /repo add <path to a local git repo>");
 		}
 		return new RepoAdd(path);
+	}
+
+	private static final List<String> PERMISSION_MODES = List.of("ask", "auto");
+
+	/** Bare /permissions cycles; an explicit mode sets it. */
+	private static Intent parsePermissions(List<String> args) {
+		if (args.isEmpty()) {
+			return new Permissions(null);
+		}
+		String m = args.get(0).toLowerCase(Locale.ROOT);
+		return PERMISSION_MODES.contains(m) ? new Permissions(m) : new Invalid("usage: /permissions [ask|auto]");
 	}
 
 	private static final List<String> FIX_ACTIONS = List.of("report", "park", "unpark", "deps");
@@ -514,6 +531,7 @@ public final class ConsoleCommands {
 			case Answer a -> "answer " + a.decision().id() + (a.option() != null ? ": " + a.option() : ": free text");
 			case RepoAdd r -> "add repo";
 			case RepoFix f -> "fix: " + f.action() + (f.repoId() != null ? " " + f.repoId() : "");
+			case Permissions p -> p.mode() == null ? "cycle permissions" : "permissions: " + p.mode();
 			case Repos r -> "list repos";
 			case AgentAction a -> a.action() + " " + (a.agentIds().size() == 1 ? displayName(a.agentIds().get(0), s) : a.agentIds().size() + " agents");
 			case TaskAction t -> t.action() + " " + t.taskId();
@@ -635,6 +653,16 @@ public final class ConsoleCommands {
 			case "/repo" -> {
 				if (argIndex == 1 && "add".startsWith(lower)) {
 					out.add(new Completion(ts, cursor, "add ", "add", "register a local git repo", null, null));
+				}
+			}
+			case "/permissions", "/perms" -> {
+				if (argIndex == 1) {
+					for (String m : PERMISSION_MODES) {
+						if (m.startsWith(lower)) {
+							out.add(new Completion(ts, cursor, m, m,
+								m.equals("ask") ? "every permission prompt comes to you" : "allow them without asking (merges still need you)", null, null));
+						}
+					}
 				}
 			}
 			case "/fix" -> {
@@ -829,6 +857,7 @@ public final class ConsoleCommands {
 				m.put("action", f.action());
 				m.put("repoId", f.repoId());
 			}
+			case Permissions p -> m.put("mode", p.mode());
 			case AgentAction a -> {
 				m.put("agents", a.agentIds());
 				m.put("action", a.action());
