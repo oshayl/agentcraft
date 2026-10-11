@@ -57,10 +57,12 @@ final class Amenities {
 		}
 		p.set(sx, y - 1, cz, St.slab(Blocks.DARK_OAK_SLAB, true));
 		p.set(sx, y, cz, St.lantern(Blocks.LANTERN, false));
-		p.set(sx, y - 1, cz - 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
-		p.set(sx, y - 1, cz + 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 3), sx + 0.5, y - 1, cz - 1.5, 180, 0);
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 4), sx + 0.5, y - 1, cz + 2.5, 0, 0);
+		for (int dx = -1; dx <= 1; dx++) {
+			p.set(sx + dx, y - 1, cz - 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
+			a.put(AnchorNames.slot(AnchorNames.LOUNGE, dx == 0 ? 3 : 9 + dx), sx + dx + 0.5, y - 1, cz - 1.5, Direction.SOUTH.toYRot(), 0);
+			p.set(sx + dx, y - 1, cz + 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
+		}
+		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 4), sx + 0.5, y - 1, cz + 2.5, Direction.NORTH.toYRot(), 0);
 		p.set(sx + 1, y - 1, cz - 2, St.of(Blocks.POTTED_FERN));
 		p.set(sx + 1, y - 1, cz + 2, St.of(Blocks.POTTED_FLOWERING_AZALEA));
 		// the way in, and where someone waiting is told to stand

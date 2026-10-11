@@ -118,16 +118,60 @@ final class Penthouse {
 	 */
 	static void spiral(Plan p, int cx, int cz, int bottom, int top) {
 		int r = 2;
-		for (int y = bottom - 1; y <= top + 1; y++) {
+		shaft(p, cx, cz, r, bottom, top);
+
+		// Where the stair has to arrive level: every height beside the tower you could stand on,
+		// which is this building's floors, plus the two ends.
+		java.util.List<Integer> floors = new java.util.ArrayList<>();
+		floors.add(bottom);
+		int wx = cx - r - 1;
+		for (int y = bottom + 2; y <= top - 2; y++) {
+			if (!p.get(wx, y - 1, cz).isAir() && p.get(wx, y, cz).isAir() && p.get(wx, y + 1, cz).isAir()) {
+				floors.add(y);
+			}
+		}
+		floors.add(top);
+
+		// Round the newel a block at a time, and when the next tread would reach a floor, keep
+		// going flat until the west side comes round - so the landing is always the cell the
+		// doorway opens onto. Eight treads is eight heights, so without this the stair arrives
+		// at a floor somewhere round the back and the door opens onto a drop.
+		int[][] ring = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+		Direction[] facing = {Direction.EAST, Direction.SOUTH, Direction.SOUTH, Direction.WEST, Direction.WEST, Direction.NORTH,
+			Direction.NORTH, Direction.EAST};
+		int west = 6; // ring index of the cell the doorway opens onto
+		int i = 0;
+		int y = bottom;
+		for (int floor : floors) {
+			while (y < floor) {
+				tread(p, cx, cz, ring[i % 8], y - 1, facing[i % 8]);
+				i++;
+				y++;
+			}
+			// flat round to the west cell, then the landing itself
+			int guard = 0;
+			while (i % 8 != west && guard++ < 8) {
+				tread(p, cx, cz, ring[i % 8], y - 1, facing[i % 8]);
+				i++;
+			}
+			landing(p, cx, cz, r, y);
+			i++;
+		}
+		for (int yy = bottom - 2; yy <= top + 1; yy++) {
+			p.set(cx, yy, cz, TRIM);
+		}
+	}
+
+	/** The glass well the stair winds up, open inside and walled outside. */
+	private static void shaft(Plan p, int cx, int cz, int r, int bottom, int top) {
+		for (int y = bottom - 2; y <= top + 2; y++) {
 			for (int dx = -r; dx <= r; dx++) {
 				for (int dz = -r; dz <= r; dz++) {
 					boolean wall = Math.abs(dx) == r || Math.abs(dz) == r;
 					boolean corner = Math.abs(dx) == r && Math.abs(dz) == r;
 					if (!wall) {
-						p.set(cx + dx, y, cz + dz, Blocks.AIR.defaultBlockState());
-					} else if (y == bottom - 1 || y == top + 1) {
-						p.set(cx + dx, y, cz + dz, WHITE);
-					} else if (corner || (y - bottom) % 5 == 0) {
+						p.set(cx + dx, y, cz + dz, y == bottom - 2 || y == top + 2 ? WHITE : Blocks.AIR.defaultBlockState());
+					} else if (y == bottom - 2 || y == top + 2 || corner || (y - bottom) % 5 == 0) {
 						p.set(cx + dx, y, cz + dz, WHITE);
 					} else {
 						p.set(cx + dx, y, cz + dz, GLASS);
@@ -135,35 +179,30 @@ final class Penthouse {
 				}
 			}
 		}
-		int[][] ring = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
-		Direction[] facing = {Direction.EAST, Direction.SOUTH, Direction.SOUTH, Direction.WEST, Direction.WEST, Direction.NORTH,
-			Direction.NORTH, Direction.EAST};
-		int steps = top - bottom;
-		for (int i = 0; i <= steps; i++) {
-			int[] c = ring[i % ring.length];
-			p.set(cx + c[0], bottom + i, cz + c[1], St.stairs(Blocks.DARK_OAK_STAIRS, facing[i % facing.length], false));
-		}
-		for (int y = bottom - 1; y <= top; y++) {
-			p.set(cx, y, cz, TRIM);
-		}
-		// A doorway onto every floor the tower passes, so the stair actually serves the building
-		// rather than just joining its two ends. A floor is a column beside the tower you could
-		// stand on: something solid underfoot and two clear above.
-		for (int y = bottom; y <= top; y++) {
-			int wx = cx - r - 1;
-			boolean landing = !p.get(wx, y - 1, cz).isAir() && p.get(wx, y, cz).isAir() && p.get(wx, y + 1, cz).isAir();
-			if (!landing && y != bottom && y != top) {
-				continue;
+	}
+
+	private static void tread(Plan p, int cx, int cz, int[] c, int y, Direction f) {
+		p.set(cx + c[0], y, cz + c[1], St.stairs(Blocks.DARK_OAK_STAIRS, f, false));
+	}
+
+	/**
+	 * A floor-level landing: the west cell and its two neighbours are solid at {@code y - 1}, the
+	 * doorway through the wall beside them is open, and there is headroom over all of it.
+	 */
+	private static void landing(Plan p, int cx, int cz, int r, int y) {
+		for (int dz = -1; dz <= 1; dz++) {
+			p.set(cx - 1, y - 1, cz + dz, TRIM);
+			for (int h = 0; h <= 2; h++) {
+				p.set(cx - 1, y + h, cz + dz, Blocks.AIR.defaultBlockState());
 			}
-			for (int h = 0; h <= 1; h++) {
-				p.set(cx - r, y + h, cz, Blocks.AIR.defaultBlockState());
-			}
-			// the tread beside the door, so you step out level instead of into the well
-			p.set(cx - r + 1, y - 1, cz, TRIM);
 		}
+		// through the wall, two high and two wide: a doorway rather than a gap
 		for (int h = 0; h <= 1; h++) {
-			p.set(cx - r, top + h, cz - 1, Blocks.AIR.defaultBlockState());
+			p.set(cx - r, y + h, cz, Blocks.AIR.defaultBlockState());
+			p.set(cx - r, y + h, cz - 1, Blocks.AIR.defaultBlockState());
 		}
+		p.set(cx - r, y - 1, cz, TRIM);
+		p.set(cx - r, y - 1, cz - 1, TRIM);
 	}
 
 	/**
@@ -184,6 +223,20 @@ final class Penthouse {
 		a.put(AnchorNames.ENTRANCE, r.x1() - 1.5, y, r.z0() + 2.5, 0, 0);
 		a.put(AnchorNames.CAM_PREFIX + "overview", (r.x0() + r.x1()) / 2.0, y + 4, r.z1() + 14.0, 0, 22);
 		a.put(AnchorNames.CAM_PREFIX + "desks", (r.x0() + r.x1()) / 2.0, y + 2, r.z0() + 7.0, 180, 8);
+	}
+
+	/**
+	 * A seat, placed so the sitter looks at {@code look}.
+	 *
+	 * <p>Every seat in here is a stair block, and a stair seats you facing the way it is NOT
+	 * facing - so the block and the anchor point opposite ways. Writing that out by hand once per
+	 * chair got it wrong at the lead's place, in the lounge, in the lobby and by the pool, with
+	 * the whole team sitting with their backs to the thing they were meant to be looking at. One
+	 * helper, and it cannot happen again.
+	 */
+	private static void seat(Plan p, Anchors.Builder a, String anchor, int x, int y, int z, Direction look, net.minecraft.world.level.block.Block wood) {
+		p.set(x, y, z, St.stairs(wood, look.getOpposite(), false));
+		a.put(anchor, x + 0.5, y, z + 0.5, look.toYRot(), 0);
 	}
 
 	/** Desk bays against the north glass: desk, two monitors bound to the agent, lamp, chair. */
@@ -314,15 +367,12 @@ final class Penthouse {
 		p.set(cx - half, y + 1, cz, St.of(Blocks.POTTED_FERN));
 		int n = 1;
 		for (int x = cx - half + 1; x <= cx + half - 1; x += 2) {
-			p.set(x, y, cz - 1, St.stairs(Blocks.BIRCH_STAIRS, Direction.NORTH, false));
-			a.put(AnchorNames.slot(AnchorNames.MEETING, n++), x + 0.5, y, cz - 0.5, 0, 0);
-			p.set(x, y, cz + 1, St.stairs(Blocks.BIRCH_STAIRS, Direction.SOUTH, false));
-			a.put(AnchorNames.slot(AnchorNames.MEETING, n++), x + 0.5, y, cz + 1.5, 180, 0);
+			seat(p, a, AnchorNames.slot(AnchorNames.MEETING, n++), x, y, cz - 1, Direction.SOUTH, Blocks.BIRCH_STAIRS);
+			seat(p, a, AnchorNames.slot(AnchorNames.MEETING, n++), x, y, cz + 1, Direction.NORTH, Blocks.BIRCH_STAIRS);
 		}
-		// the head of the table: the lead's seat, facing down it
-		p.set(cx + half + 1, y, cz, St.stairs(Blocks.DARK_OAK_STAIRS, Direction.EAST, false));
-		a.put("seat_lead", cx + half + 1.5, y, cz + 0.5, 270, 0);
-		a.put(AnchorNames.MEETING, cx + half + 1.5, y, cz + 0.5, 270, 0);
+		// the head of the table: the lead sits at the east end and looks west, down the table
+		seat(p, a, "seat_lead", cx + half + 1, y, cz, Direction.WEST, Blocks.DARK_OAK_STAIRS);
+		a.put(AnchorNames.MEETING, cx + half + 1.5, y, cz + 0.5, Direction.WEST.toYRot(), 0);
 	}
 
 	/** Armchairs round a low table in the corner, for the agents with nothing on. */
@@ -337,13 +387,9 @@ final class Penthouse {
 			}
 		}
 		p.set(x, y, z, St.slab(Blocks.DARK_OAK_SLAB, true));
-		p.set(x - 1, y, z - 1, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
-		p.set(x + 1, y, z - 1, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
-		p.set(x - 1, y, z + 1, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
-		p.set(x + 1, y, z + 1, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
-		a.put(AnchorNames.LOUNGE, x - 1 + 0.5, y, z - 0.5, 180, 0);
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 2), x + 1 + 0.5, y, z - 0.5, 180, 0);
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 3), x - 1 + 0.5, y, z + 1.5, 0, 0);
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 4), x + 1 + 0.5, y, z + 1.5, 0, 0);
+		seat(p, a, AnchorNames.LOUNGE, x - 1, y, z, Direction.EAST, Blocks.SPRUCE_STAIRS);
+		seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, 2), x + 1, y, z, Direction.WEST, Blocks.SPRUCE_STAIRS);
+		seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, 3), x, y, z - 1, Direction.SOUTH, Blocks.SPRUCE_STAIRS);
+		seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, 4), x, y, z + 1, Direction.NORTH, Blocks.SPRUCE_STAIRS);
 	}
 }
