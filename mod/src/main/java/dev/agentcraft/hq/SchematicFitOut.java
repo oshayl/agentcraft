@@ -185,13 +185,13 @@ final class SchematicFitOut {
 		for (int x = cx - 1; x <= cx + 1; x++) {
 			for (int z = cz - 1; z <= cz; z++) {
 				if (p.isAir(x, floorY, z) && p.isAir(x, floorY + 1, z)) {
-					p.set(x, floorY, z, St.slab(Blocks.WARPED_SLAB, true));
+					p.set(x, floorY, z, St.slab(Blocks.DARK_OAK_SLAB, true));
 				}
 			}
 		}
 		for (int[] c : new int[][] {{cx - 2, cz - 1}, {cx + 2, cz - 1}, {cx - 2, cz}, {cx + 2, cz}}) {
 			if (p.isAir(c[0], floorY, c[1])) {
-				p.set(c[0], floorY, c[1], St.stairs(Blocks.WARPED_STAIRS, c[0] < cx ? Direction.EAST : Direction.WEST, false));
+				p.set(c[0], floorY, c[1], St.stairs(Blocks.DARK_OAK_STAIRS, c[0] < cx ? Direction.EAST : Direction.WEST, false));
 			}
 		}
 		// something green in each corner

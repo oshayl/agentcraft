@@ -42,7 +42,7 @@ public final class SchematicHqBuilder implements HqBuilder {
 	private static final int SITE_X = 60;
 	private static final int SITE_Z = -20;
 	/** Land around the build: room for the hills to rise and come back down (SchematicLandscape). */
-	private static final int MARGIN = 28;
+	private static final int MARGIN = 38;
 	/** A ceiling this close above means a cell is indoors rather than on a roof. */
 	private static final int CEILING = 8;
 

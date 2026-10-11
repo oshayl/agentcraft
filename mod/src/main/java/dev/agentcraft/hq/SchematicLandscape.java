@@ -18,10 +18,14 @@ import net.minecraft.world.level.block.state.BlockState;
 final class SchematicLandscape {
 	/** How far the land stays flat around the build before the ground starts to lift. */
 	private static final int APRON = 3;
-	/** The hills reach their full height this far out from the build. */
-	private static final int RISE = 11;
-	/** ...and come back down over the last stretch before the site edge. */
-	private static final int FALL = 9;
+	/**
+	 * The hills reach their full height this far out from the build, and come back down over this
+	 * much before the site edge. Both are generous on purpose: blocky terrain climbs a block at a
+	 * time, so a short rise is a staircase of one-block terraces whose faces read as brown contour
+	 * lines from any distance. Spread the same height over twice the ground and it rolls.
+	 */
+	private static final int RISE = 17;
+	private static final int FALL = 13;
 
 	private SchematicLandscape() {
 	}
@@ -65,9 +69,15 @@ final class SchematicLandscape {
 		plant(p, ground, flat);
 	}
 
-	/** Height above the meadow: nothing on the build's apron, a crest out in the ring, nothing at the edge. */
+	/**
+	 * Height above the meadow: nothing on the build's apron, hills out in the ring, nothing at the
+	 * edge of the site. The long wavelength term is what stops it reading as a ring - without it
+	 * every direction crests at the same height and the result is a crater rim.
+	 */
 	private static int height(Plan p, Flat flat, int x, int z) {
-		double crest = 5.0 + 1.9 * Math.sin(x * 0.13 + z * 0.08) + 1.3 * Math.cos(z * 0.17 - x * 0.09) + 0.9 * Math.sin((x + z) * 0.29);
+		double swell = 1.0 + 0.55 * Math.sin(x * 0.035 + 1.7) + 0.45 * Math.cos(z * 0.041 - 0.6) + 0.30 * Math.sin((x - z) * 0.022);
+		double crest = (4.2 + 1.7 * Math.sin(x * 0.09 + z * 0.06) + 1.2 * Math.cos(z * 0.12 - x * 0.07) + 0.7 * Math.sin((x + z) * 0.21))
+			* Math.max(0.15, swell);
 		double out = HqLandscape.smooth(APRON, RISE, flat.distance(x, z));
 		int edge = Math.min(Math.min(x - p.minX, p.maxX - x), Math.min(z - p.minZ, p.maxZ - z));
 		return (int) Math.round(crest * out * HqLandscape.smooth(0, FALL, edge));
@@ -119,8 +129,12 @@ final class SchematicLandscape {
 				}
 				double r = HqLandscape.rnd(x, z, 9001);
 				int h = top - ground;
-				// denser on the hills, thinning out towards the flat so the build keeps its light
-				double density = 0.010 + 0.055 * HqLandscape.smooth(APRON, RISE + 4, d) + 0.012 * Math.min(1, h / 4.0);
+				// Denser on the hills, thinning towards the build so the windows keep their light
+				// and, at the far end, thinning again rather than stopping at a circle of wood.
+				int edge = Math.min(Math.min(x - p.minX, p.maxX - x), Math.min(z - p.minZ, p.maxZ - z));
+				double stand = HqLandscape.smooth(APRON, RISE + 2, d) * HqLandscape.smooth(0, FALL + 4, edge);
+				double clumps = 0.5 + 0.5 * Math.sin(x * 0.07 + Math.cos(z * 0.06) * 2.2);
+				double density = 0.008 + 0.085 * stand * (0.45 + 0.55 * clumps) + 0.015 * Math.min(1, h / 4.0);
 				if (r < density && spaced(x, z)) {
 					HqLandscape.tree(p, x, z, kind(x, z), 9100);
 					continue;
@@ -163,8 +177,11 @@ final class SchematicLandscape {
 				case 3 -> Blocks.OXEYE_DAISY.defaultBlockState();
 				default -> Blocks.LILY_OF_THE_VALLEY.defaultBlockState();
 			};
-		} else if (r < (hill ? 0.40 : 0.385)) {
-			s = Blocks.BUSH.defaultBlockState();
+		} else if (r < (hill ? 0.52 : 0.385)) {
+			// the slopes are stepped by a block at a time, and bare steps read as terracing:
+			// undergrowth on them breaks the contour lines up
+			s = hill && r > 0.44 ? St.leafLitter(Direction.from2DDataValue(HqLandscape.hash(x, z, 9600) & 3), 1 + HqLandscape.hash(x, z, 9601) % 3)
+				: Blocks.BUSH.defaultBlockState();
 		}
 		if (s != null) {
 			p.set(x, top + 1, z, s);
