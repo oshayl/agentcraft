@@ -28,84 +28,92 @@ final class Amenities {
 	 * A glass lobby at the foot of the stair tower: somewhere to wait, with seats facing each
 	 * other across a low table, plants, and the way up in front of you.
 	 */
-	static void lobby(Plan p, Anchors.Builder a, int cx, int cz, int ground, int towerRadius) {
+	static int lobby(Plan p, Anchors.Builder a, int cx, int cz, int ground, int towerRadius, int westLimit) {
 		// Level with the house, not with the lawn. The building stands on a plinth two blocks
 		// up, and a lobby laid on the grass meant you stepped down out of the house and up
-		// again into the stair, with nothing joining the two but the stair's own doorway - a
-		// gap you could see the garden through from inside the room you arrive in.
+		// again into the stair, with nothing joining the two but the stair's own doorway.
 		int floor = ground + 1;
 		int y = floor + 1;
-		int r = towerRadius + 3;
+		// Not a ring. A square lobby round a seven-wide tower left two columns of floor on each
+		// side - a corridor you could not put a chair in without blocking it, which is exactly
+		// what it looked like with two agents standing in it. It cannot grow west, because the
+		// house is there, so it grows the other three ways and the room is the east half.
+		int x0 = Math.max(westLimit, cx - towerRadius - 6);
+		int x1 = cx + towerRadius + 6;
+		int z0 = cz - towerRadius - 5;
+		int z1 = cz + towerRadius + 5;
 		int top = y + 4;
-		for (int dx = -r; dx <= r; dx++) {
-			for (int dz = -r; dz <= r; dz++) {
+		for (int x = x0; x <= x1; x++) {
+			for (int z = z0; z <= z1; z++) {
 				// the tower keeps its own walls; the lobby wraps round it
-				if (Math.abs(dx) <= towerRadius && Math.abs(dz) <= towerRadius) {
+				if (Math.abs(x - cx) <= towerRadius && Math.abs(z - cz) <= towerRadius) {
 					continue;
 				}
-				int x = cx + dx;
-				int z = cz + dz;
-				boolean wall = Math.abs(dx) == r || Math.abs(dz) == r;
+				boolean wall = x == x0 || x == x1 || z == z0 || z == z1;
+				boolean corner = (x == x0 || x == x1) && (z == z0 || z == z1);
 				p.set(x, floor, z, FLOOR);
 				p.set(x, ground, z, WHITE); // the plinth it stands on, so it is not floating
+				boolean post = wall && ((x - x0) % 5 == 0 || (z - z0) % 5 == 0);
 				for (int h = y; h < top; h++) {
-					p.set(x, h, z, wall ? (Math.abs(dx) == r && Math.abs(dz) == r ? WHITE : GLASS) : Blocks.AIR.defaultBlockState());
+					p.set(x, h, z, wall ? (corner || post ? WHITE : GLASS) : Blocks.AIR.defaultBlockState());
 				}
-				// light in the lobby ceiling. It had one lantern on its table, so the room you
-				// arrive in measured zero block light over most of its floor at night.
-				boolean lit = !wall && Math.abs(dx) % 3 == 1 && Math.abs(dz) % 3 == 1;
+				// light in the ceiling. It had one lantern on its table, so the room you arrive
+				// in measured zero block light over most of its floor at night.
+				boolean lit = !wall && (x - x0) % 3 == 1 && (z - z0) % 3 == 1;
 				p.set(x, top, z, lit ? dev.agentcraft.block.ModBlocks.GLOW_PANEL.defaultBlockState() : WHITE);
 			}
 		}
-		// The lobby is a ring two blocks deep around the tower, not a room with a tower in it:
-		// the tower is seven across and the lobby thirteen, so there are two columns of floor on
-		// each side and nothing wider than that fits. It used to be furnished as though it were
-		// a room - a three-wide seating group starting four blocks off the tower - which put its
-		// far side exactly on the wall: a chair replaced the glass and the anchor for whoever
-		// sat in it was inside the wall. So it is laid out as what it is, a corridor you arrive
-		// in, with everything against the glass and the walking line left clear.
-		int inX0 = cx - r + 1;
-		int inX1 = cx + r - 1;
-		int inZ1 = cz + r - 1;
-		// benches either side of the door, backs to the glass, looking in at the stair
-		int n = 3;
-		for (int dx : new int[] {-3, -2, 2, 3}) {
-			seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, n++), cx + dx, y, inZ1, Direction.NORTH);
+
+		// The lounge: a rug, a low table and four chairs round it, in the wide bay east of the
+		// tower. Chairs on the four sides rather than side by side, because an agent steps into
+		// a seat from the cell next to it - two chairs touching means standing on one to sit in
+		// the other, and the slot contract wants 1.6 between any two places at a station.
+		int lx = cx + towerRadius + 3;
+		for (int dx = -2; dx <= 2; dx++) {
+			for (int dz = -2; dz <= 2; dz++) {
+				boolean border = Math.abs(dx) == 2 || Math.abs(dz) == 2;
+				p.set(lx + dx, y, cz + dz, St.carpet(border ? DyeColor.BROWN : DyeColor.LIGHT_GRAY));
+			}
 		}
-		for (int dx : new int[] {-1, 1}) {
-			p.set(cx + dx, y, inZ1, St.of(dx < 0 ? Blocks.POTTED_FERN : Blocks.POTTED_FLOWERING_AZALEA));
-		}
-		// a desk down the east side, facing the way you come in
-		for (int dz = -1; dz <= 1; dz++) {
-			p.set(inX1, y, cz + dz, St.slab(Blocks.DARK_OAK_SLAB, true));
-			p.set(inX1, y + 1, cz + dz, dz == 0
-				? dev.agentcraft.block.ModBlocks.MONITOR.defaultBlockState().setValue(dev.agentcraft.block.FacingEntityBlock.FACING, Direction.WEST)
+		p.set(lx, y, cz, St.slab(Blocks.DARK_OAK_SLAB, true));
+		p.set(lx, y + 1, cz, St.lantern(Blocks.LANTERN, false));
+		seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, 3), lx - 2, y, cz, Direction.EAST);
+		seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, 4), lx + 2, y, cz, Direction.WEST);
+		seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, 5), lx, y, cz - 2, Direction.SOUTH);
+		seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, 6), lx, y, cz + 2, Direction.NORTH);
+
+		// a desk facing the door, in the bay north of the tower
+		int dz0 = cz - towerRadius - 2;
+		for (int dx = -1; dx <= 1; dx++) {
+			p.set(cx + dx, y, dz0, St.slab(Blocks.DARK_OAK_SLAB, true));
+			p.set(cx + dx, y + 1, dz0, dx == 0
+				? dev.agentcraft.block.ModBlocks.MONITOR.defaultBlockState().setValue(dev.agentcraft.block.FacingEntityBlock.FACING, Direction.SOUTH)
 				: St.lantern(Blocks.LANTERN, false));
 		}
-		// and something green in the corners, which is the only place nobody has to walk
-		for (int x : new int[] {inX0, inX1}) {
-			for (int z : new int[] {cz - r + 1, inZ1}) {
+
+		// something green in the corners, which is the only floor nobody has to walk over
+		for (int x : new int[] {x0 + 1, x1 - 1}) {
+			for (int z : new int[] {z0 + 1, z1 - 1}) {
 				if (p.isAir(x, y, z) && !p.isAir(x, y - 1, z)) {
-					p.set(x, y, z, St.of(Blocks.POTTED_AZALEA));
+					p.set(x, y, z, St.of(((x + z) & 1) == 0 ? Blocks.POTTED_AZALEA : Blocks.POTTED_FERN));
 				}
 			}
 		}
-		// the way in, three wide, and where someone waiting is told to stand
+
+		// the way in, three wide, with steps up from the lawn onto the plinth
 		for (int dx = -1; dx <= 1; dx++) {
-			p.set(cx + dx, ground, cz + r, FLOOR);
+			p.set(cx + dx, floor, z1, FLOOR);
 			for (int h = 0; h <= 2; h++) {
-				p.set(cx + dx, y + h, cz + r, Blocks.AIR.defaultBlockState());
+				p.set(cx + dx, y + h, z1, Blocks.AIR.defaultBlockState());
 			}
-		}
-		// steps up from the lawn: the lobby stands on the plinth with the rest of the building
-		for (int dx = -1; dx <= 1; dx++) {
-			p.set(cx + dx, floor, cz + r + 1, St.stairs(Blocks.SMOOTH_SANDSTONE_STAIRS, Direction.NORTH, false));
-			p.set(cx + dx, ground, cz + r + 1, WHITE);
+			p.set(cx + dx, floor, z1 + 1, St.stairs(Blocks.SMOOTH_SANDSTONE_STAIRS, Direction.NORTH, false));
+			p.set(cx + dx, ground, z1 + 1, WHITE);
 			for (int h = 1; h <= 2; h++) {
-				p.set(cx + dx, floor + h, cz + r + 1, Blocks.AIR.defaultBlockState());
+				p.set(cx + dx, floor + h, z1 + 1, Blocks.AIR.defaultBlockState());
 			}
 		}
-		a.put(AnchorNames.ENTRANCE, cx + 0.5, y, cz + r - 1.5, 180, 0);
+		a.put(AnchorNames.ENTRANCE, cx + 0.5, y, z1 - 1.5, 180, 0);
+		return x0;
 	}
 
 	/**

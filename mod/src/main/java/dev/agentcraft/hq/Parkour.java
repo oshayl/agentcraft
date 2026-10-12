@@ -217,6 +217,9 @@ final class Parkour {
 	/** A lit path on the grass from the building to the start, so the course is findable. */
 	static void approach(Plan p, int fromX, int fromZ, int toX, int toZ, int ground) {
 		int steps = (int) Math.round(Math.hypot(toX - fromX, toZ - fromZ));
+		// stop short of the start pad: paving over it replaced the lime concrete with a slab and
+		// left the anchor a block above the surface it names
+		steps = Math.max(0, steps - 2);
 		for (int i = 0; i <= steps; i++) {
 			double f = steps == 0 ? 0 : i / (double) steps;
 			int x = (int) Math.round(fromX + (toX - fromX) * f);

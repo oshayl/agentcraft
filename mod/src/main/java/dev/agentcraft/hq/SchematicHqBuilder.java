@@ -180,12 +180,12 @@ public final class SchematicHqBuilder implements HqBuilder {
             if (poolDeck > 0) {
 				Amenities.passage(p, tx - Penthouse.TOWER_R - 1, tz, SITE_X + b[2], poolDeck);
 			}
-			Amenities.lobby(p, a, tx, tz, GROUND, Penthouse.TOWER_R);
+			// it may not grow west past the house; the house is there
+			int lobbyWest = Amenities.lobby(p, a, tx, tz, GROUND, Penthouse.TOWER_R, SITE_X + b[2]);
 			// And the front hall, re-opened after the lobby rather than before it: the lobby
 			// wraps the tower and rebuilds its own west wall, which sealed up the doorway the
-			// stair's ground landing had just cut through it. Starts on that wall (the lobby's
-			// radius out from the tower) and runs west until it is standing in the house.
-			boolean hall = Amenities.hall(p, tx - Penthouse.TOWER_R - 3, tz, GROUND + 2, Penthouse.oversail() + 8);
+			// stair's ground landing had just cut through it.
+			boolean hall = Amenities.hall(p, lobbyWest, tz, GROUND + 2, Penthouse.oversail() + 8);
 			stairNote += hall ? ", front hall open" : ", BUT the front hall found no floor to join";
 			// somewhere to be while the team works: a run through the grounds, out past the woods
 			int hcx = (SITE_X + b[0] + SITE_X + b[2]) / 2;
@@ -193,12 +193,12 @@ public final class SchematicHqBuilder implements HqBuilder {
 			// Everything standing, so the run goes round it and not through it. The lobby is the
 			// part that catches people out: it is not on the house's footprint, it is a ring
 			// round a tower that sits off the end of it.
-			int lobbyR = Penthouse.TOWER_R + 3;
+			int lobbyR = Penthouse.TOWER_R + 6;
 			int[] built = {Math.min(SITE_X + b[0], tx - lobbyR) - 2, Math.min(SITE_Z + b[1], tz - lobbyR) - 2,
-				Math.max(SITE_X + b[2], tx + lobbyR) + 2, Math.max(SITE_Z + b[3], tz + lobbyR) + 2};
+				Math.max(SITE_X + b[2], tx + lobbyR) + 3, Math.max(SITE_Z + b[3], tz + lobbyR) + 3};
 			// the run starts out the way you leave the lobby, so the walk to it is a straight line
 			int doorX = tx;
-			int doorZ = tz + lobbyR;
+			int doorZ = tz + Penthouse.TOWER_R + 5;
 			int[] start = Parkour.build(p, a, hcx, hcz, GROUND, COURSE_INNER, COURSE_OUTER, built,
 				Math.atan2(doorZ - hcz, doorX - hcx));
 			if (start != null) {
