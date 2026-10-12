@@ -368,7 +368,10 @@ public class TaskScreen extends Screen {
 			mouseY, false);
 		button(g, "reassign", "Reassign", x + 2 * (bw + gap), y, bw, 20, false, live && !sending && !cancelled && !done, null,
 			mouseX, mouseY, false);
-		button(g, "cancel", confirmCancel ? "Confirm" : "Cancel", x + 3 * (bw + gap), y, inner - 3 * (bw + gap), 20, primary.equals("cancel"),
+		// "Cancel" next to "Esc close" reads as the dialog's own cancel, so it was pressed to get
+		// out, did nothing visible (it only arms a confirmation), and was reported as broken. The
+		// button says which thing it stops.
+		button(g, "cancel", confirmCancel ? "Confirm stop" : "Stop task", x + 3 * (bw + gap), y, inner - 3 * (bw + gap), 20, primary.equals("cancel"),
 			live && !sending && !cancelled && !done, null, mouseX, mouseY, false);
 		y += 20;
 		if (reassignOpen && s != null) {
@@ -477,7 +480,7 @@ public class TaskScreen extends Screen {
 			return null;
 		}
 		if (confirmCancel) {
-			return "Cancel " + t.id() + "? Press Confirm (it stops the work on it)";
+			return "Stop " + t.id() + " for good? Press Confirm stop. (Esc just closes this card.)";
 		}
 		// A retry that is immediately blocked again looks exactly like a button that does
 		// nothing: you press it, the card still says Blocked, and the only thing that changed
