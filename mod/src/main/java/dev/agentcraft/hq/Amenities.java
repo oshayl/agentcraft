@@ -29,7 +29,12 @@ final class Amenities {
 	 * other across a low table, plants, and the way up in front of you.
 	 */
 	static void lobby(Plan p, Anchors.Builder a, int cx, int cz, int ground, int towerRadius) {
-		int y = ground + 1;
+		// Level with the house, not with the lawn. The building stands on a plinth two blocks
+		// up, and a lobby laid on the grass meant you stepped down out of the house and up
+		// again into the stair, with nothing joining the two but the stair's own doorway - a
+		// gap you could see the garden through from inside the room you arrive in.
+		int floor = ground + 1;
+		int y = floor + 1;
 		int r = towerRadius + 3;
 		int top = y + 4;
 		for (int dx = -r; dx <= r; dx++) {
@@ -41,7 +46,8 @@ final class Amenities {
 				int x = cx + dx;
 				int z = cz + dz;
 				boolean wall = Math.abs(dx) == r || Math.abs(dz) == r;
-				p.set(x, ground, z, FLOOR);
+				p.set(x, floor, z, FLOOR);
+				p.set(x, ground, z, WHITE); // the plinth it stands on, so it is not floating
 				for (int h = y; h < top; h++) {
 					p.set(x, h, z, wall ? (Math.abs(dx) == r && Math.abs(dz) == r ? WHITE : GLASS) : Blocks.AIR.defaultBlockState());
 				}
@@ -91,7 +97,58 @@ final class Amenities {
 				p.set(cx + dx, y + h, cz + r, Blocks.AIR.defaultBlockState());
 			}
 		}
+		// steps up from the lawn: the lobby stands on the plinth with the rest of the building
+		for (int dx = -1; dx <= 1; dx++) {
+			p.set(cx + dx, floor, cz + r + 1, St.stairs(Blocks.SMOOTH_SANDSTONE_STAIRS, Direction.NORTH, false));
+			p.set(cx + dx, ground, cz + r + 1, WHITE);
+			for (int h = 1; h <= 2; h++) {
+				p.set(cx + dx, floor + h, cz + r + 1, Blocks.AIR.defaultBlockState());
+			}
+		}
 		a.put(AnchorNames.ENTRANCE, cx + 0.5, y, cz + r - 1.5, 180, 0);
+	}
+
+	/**
+	 * A walkway from the lobby straight into the building beside it, at the lobby's own level.
+	 *
+	 * <p>The stair's landing doorway was the only thing joining the two, and it is three blocks
+	 * wide in the middle of one side. This is the front hall: you come in, and the house is in
+	 * front of you.
+	 *
+	 * @return true when it found floor to join
+	 */
+	static boolean hall(Plan p, int fromX, int z, int y, int reach) {
+		int to = Integer.MIN_VALUE;
+		for (int x = fromX - 1; x >= fromX - reach; x--) {
+			boolean here = standable(p, x, y, z) || standable(p, x, y, z - 1) || standable(p, x, y, z + 1);
+			boolean beyond = standable(p, x - 1, y, z) || standable(p, x - 1, y, z - 1) || standable(p, x - 1, y, z + 1);
+			if (here && beyond) {
+				to = x;
+				break;
+			}
+		}
+		if (to == Integer.MIN_VALUE) {
+			return false;
+		}
+		for (int x = fromX; x >= to; x--) {
+			for (int dz = -1; dz <= 1; dz++) {
+				p.set(x, y - 1, z + dz, FLOOR);
+				for (int h = 0; h <= 2; h++) {
+					p.set(x, y + h, z + dz, Blocks.AIR.defaultBlockState());
+				}
+			}
+			for (int dz = -2; dz <= 2; dz += 4) {
+				for (int h = -1; h <= 3; h++) {
+					p.set(x, y + h, z + dz, Math.abs(h) == 3 || h == -1 ? WHITE : GLASS);
+				}
+			}
+			p.set(x, y + 3, z, x % 3 == 0 ? dev.agentcraft.block.ModBlocks.GLOW_PANEL.defaultBlockState() : WHITE);
+		}
+		return true;
+	}
+
+	private static boolean standable(Plan p, int x, int y, int z) {
+		return !p.get(x, y - 1, z).isAir() && p.get(x, y, z).isAir() && p.get(x, y + 1, z).isAir();
 	}
 
 	/** A seat facing {@code look}: a stair seats you the way it is NOT facing, so it points back. */

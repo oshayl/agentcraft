@@ -181,6 +181,12 @@ public final class SchematicHqBuilder implements HqBuilder {
 				Amenities.passage(p, tx - Penthouse.TOWER_R - 1, tz, SITE_X + b[2], poolDeck);
 			}
 			Amenities.lobby(p, a, tx, tz, GROUND, Penthouse.TOWER_R);
+			// And the front hall, re-opened after the lobby rather than before it: the lobby
+			// wraps the tower and rebuilds its own west wall, which sealed up the doorway the
+			// stair's ground landing had just cut through it. Starts on that wall (the lobby's
+			// radius out from the tower) and runs west until it is standing in the house.
+			boolean hall = Amenities.hall(p, tx - Penthouse.TOWER_R - 3, tz, GROUND + 2, Penthouse.oversail() + 8);
+			stairNote += hall ? ", front hall open" : ", BUT the front hall found no floor to join";
 			// somewhere to be while the team works: a run through the grounds, out past the woods
 			int hcx = (SITE_X + b[0] + SITE_X + b[2]) / 2;
 			int hcz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
