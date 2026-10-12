@@ -415,7 +415,6 @@ final class Penthouse {
 	private static void desks(Plan p, Anchors.Builder a, Room r, List<String> agents) {
 		int y = r.y();
 		int zd = r.z0();
-		BlockState desk = St.slab(Blocks.DARK_OAK_SLAB, true);
 		int span = r.width();
 		int bays = agents.size();
 		int pitch = Math.max(3, span / Math.max(1, bays));
@@ -423,29 +422,53 @@ final class Penthouse {
 		for (int i = 0; i < bays; i++) {
 			String id = agents.get(i);
 			int bx = Math.min(r.x1() - 1, start + i * pitch);
-			for (int x = bx - 1; x <= bx + 1; x++) {
-				p.set(x, y, zd, desk);
-				for (int h = 1; h <= 2; h++) {
-					p.set(x, y + h, zd, ModBlocks.MONITOR.defaultBlockState().setValue(PanelBlock.FACING, Direction.SOUTH)
-						.setValue(MonitorBlock.LIT, true));
-					p.bind(x, y + h, zd, id);
-				}
-			}
-			p.set(bx, y + 3, zd, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.IDLE));
-			p.bind(bx, y + 3, zd, "agent:" + id);
-			p.set(bx - 1, y + 3, zd, WALNUT);
-			p.set(bx + 1, y + 3, zd, WALNUT);
-			// the chair is the desk spot: the agent sits looking at its monitors
-			p.set(bx, y, zd + 1, St.stairs(Blocks.DARK_OAK_STAIRS, Direction.SOUTH, false));
+			deskBay(p, bx, zd, y, Direction.NORTH, id);
 			a.put(AnchorNames.DESK_PREFIX + id, bx + 0.5, y, zd + 1.5, 180, 0);
 			a.put("seat_" + id, bx + 0.5, y, zd + 1.5, 180, 0);
 			a.put(AnchorNames.MONITOR_PREFIX + id, bx + 0.5, y + 2.0, zd + 0.25, 0, 0);
 			if (i + 1 < bays) {
-				int gx = bx + pitch / 2;
-				p.set(gx, y, zd, Blocks.CHISELED_BOOKSHELF.defaultBlockState().setValue(HorizontalDirectionalBlock.FACING, Direction.SOUTH));
-				p.set(gx, y + 1, zd, LANTERN);
+				deskPost(p, bx + pitch / 2, zd, y, Direction.SOUTH);
 			}
 		}
+	}
+
+	/**
+	 * One desk bay, the way the work floor builds them: three cells of desk against the wall,
+	 * two courses of monitor above it bound to the agent, that agent's status lamp over the
+	 * middle, and the chair in front. {@code toDesk} is the way the sitter faces.
+	 *
+	 * <p>Shared so the storeys below build the same thing. They used to have their own, simpler
+	 * version - a slab with one screen on it - and a floor furnished two different ways reads as
+	 * a floor nobody finished.
+	 *
+	 * @return the seat cell, for the caller to anchor on
+	 */
+	static int[] deskBay(Plan p, int bx, int bz, int y, Direction toDesk, String agentId) {
+		Direction along = toDesk.getClockWise();
+		Direction toSeat = toDesk.getOpposite();
+		BlockState desk = St.slab(Blocks.DARK_OAK_SLAB, true);
+		for (int i = -1; i <= 1; i++) {
+			int x = bx + along.getStepX() * i;
+			int z = bz + along.getStepZ() * i;
+			p.set(x, y, z, desk);
+			for (int h = 1; h <= 2; h++) {
+				p.set(x, y + h, z, ModBlocks.MONITOR.defaultBlockState().setValue(PanelBlock.FACING, toSeat).setValue(MonitorBlock.LIT, true));
+				p.bind(x, y + h, z, agentId);
+			}
+			p.set(x, y + 3, z, WALNUT);
+		}
+		p.set(bx, y + 3, bz, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.IDLE));
+		p.bind(bx, y + 3, bz, "agent:" + agentId);
+		int sx = bx + toSeat.getStepX();
+		int sz = bz + toSeat.getStepZ();
+		p.set(sx, y, sz, St.stairs(Blocks.DARK_OAK_STAIRS, toSeat, false));
+		return new int[] {sx, sz};
+	}
+
+	/** The lantern plinth that stands between two desk bays. */
+	static void deskPost(Plan p, int x, int z, int y, Direction toSeat) {
+		p.set(x, y, z, Blocks.CHISELED_BOOKSHELF.defaultBlockState().setValue(HorizontalDirectionalBlock.FACING, toSeat));
+		p.set(x, y + 1, z, LANTERN);
 	}
 
 	/** The board the team reads: seven wide, four high, on the south wall facing the desks. */

@@ -280,60 +280,66 @@ final class SchematicFitOut {
 				}
 			}
 		}
-		benches(p, a, floorY, x0, z0, x1, z1, spineZ, seats);
+		deskRow(p, a, floorY, x0, z0, x1, z1, spineZ, seats);
 		racks(p, floorY, x0, z0, x1, z1, spineZ);
 		return x1 - x0 + 1;
 	}
 
 	/**
-	 * Desks against the glass, facing out, in bays of two with a gap between them - the layout
-	 * the work floor upstairs uses, at the depth a house storey has. Monitors go on the desk
-	 * rather than the wall: there is glass behind these, and a monitor hung on glass is a
-	 * monitor floating over the garden.
+	 * One run of desks along the wall furthest from the spine, built the way the work floor
+	 * upstairs builds them (see {@link Penthouse#deskBay}).
+	 *
+	 * <p>They used to go wherever a wall cell happened to be free, every third column, on both
+	 * long sides: on a house floor whose plan is nothing like a rectangle that put two desks
+	 * round an inside corner facing different ways, with a blank wall behind them. A bay is five
+	 * wide in plan - three of desk, one of seat clearance either side - so they are laid at a
+	 * pitch of five from a centred start, and a bay goes in only where all of it fits.
+	 *
+	 * @return how many agents got a desk
 	 */
-	private static void benches(Plan p, Anchors.Builder a, int y, int x0, int z0, int x1, int z1, int spineZ, List<String> seats) {
-		int next = 0;
-		for (int side = 0; side < 2; side++) {
-			int zd = side == 0 ? z0 : z1;
-			Direction look = side == 0 ? Direction.NORTH : Direction.SOUTH;
-			if (Math.abs(zd - spineZ) <= 1) {
-				continue; // the spine comes out here; leave it clear
+	private static int deskRow(Plan p, Anchors.Builder a, int y, int x0, int z0, int x1, int z1, int spineZ, List<String> seats) {
+		if (seats.isEmpty()) {
+			return 0;
+		}
+		// the long wall the spine does not come out of, so the run is never cut in half by it
+		boolean north = Math.abs(z0 - spineZ) > Math.abs(z1 - spineZ);
+		int zd = north ? z0 : z1;
+		Direction toDesk = north ? Direction.NORTH : Direction.SOUTH;
+		int pitch = 5;
+		int span = x1 - x0 + 1;
+		int start = x0 + Math.max(1, (span - pitch * seats.size()) / 2) + 1;
+		int placed = 0;
+		for (int i = 0; i < seats.size(); i++) {
+			int bx = start + i * pitch;
+			if (bx - 1 < x0 || bx + 1 > x1 || !bayFits(p, bx, zd, y, toDesk)) {
+				continue;
 			}
-			for (int x = x0 + 1; x <= x1 - 1; x++) {
-				// every third column, not three in every four: desks shoulder to shoulder mean an
-				// agent steps into one by standing on the next, which is what the HQ check calls
-				// a step-in cell on furniture
-				if ((x - x0) % 3 != 1 || !p.isAir(x, y, zd) || !p.isAir(x, y + 1, zd)) {
-					continue;
-				}
-				if (p.isAir(x, y - 1, zd)) {
-					continue;
-				}
-				// The chair goes in the cell in front, and a bay whose front cell has no floor
-				// is a bay nobody can sit at. It used to get the desk and the anchor anyway, so
-				// an agent was sent to a chair that was never placed, over a hole.
-				int zs = zd - look.getStepZ();
-				boolean seatable = p.isAir(x, y, zs) && !p.isAir(x, y - 1, zs);
-				p.set(x, y, zd, St.slab(Blocks.DARK_OAK_SLAB, true));
-				p.set(x, y + 1, zd, ModBlocks.MONITOR.defaultBlockState().setValue(FacingEntityBlock.FACING, look.getOpposite()));
-				// One screen each, and the first of them the team board. An unbound monitor falls
-				// back to the activity feed, so a floor of them was six copies of the same feed -
-				// which reads as "every screen is showing Wren" on a day Wren is the one working.
-				String who = "feed";
-				if (seatable && next > 0 && next - 1 < seats.size()) {
-					who = seats.get(next - 1);
-					p.set(x, y, zs, St.stairs(Blocks.DARK_OAK_STAIRS, look.getOpposite(), false));
-					a.put(AnchorNames.desk(who), x + 0.5, y, zs + 0.5, look.toYRot(), 0);
-					a.put(AnchorNames.monitor(who), x + 0.5, y + 1.5, zd + 0.5 - look.getStepZ() * 0.25, look.getOpposite().toYRot(), 0);
-				} else if (seatable) {
-					p.set(x, y, zs, St.stairs(Blocks.DARK_OAK_STAIRS, look.getOpposite(), false));
-				}
-				p.bind(x, y + 1, zd, who);
-				if (seatable) {
-					next++;
-				}
+			String id = seats.get(i);
+			int[] seat = Penthouse.deskBay(p, bx, zd, y, toDesk, id);
+			a.put(AnchorNames.desk(id), seat[0] + 0.5, y, seat[1] + 0.5, toDesk.toYRot(), 0);
+			a.put("seat_" + id, seat[0] + 0.5, y, seat[1] + 0.5, toDesk.toYRot(), 0);
+			a.put(AnchorNames.monitor(id), bx + 0.5, y + 2.0, zd + 0.5 - toDesk.getStepZ() * 0.25, toDesk.getOpposite().toYRot(), 0);
+			if (i + 1 < seats.size()) {
+				Penthouse.deskPost(p, bx + pitch / 2, zd, y, toDesk.getOpposite());
+			}
+			placed++;
+		}
+		return placed;
+	}
+
+	/** Three cells of wall to build the desk into, and a clear floor cell in front to sit on. */
+	private static boolean bayFits(Plan p, int bx, int bz, int y, Direction toDesk) {
+		Direction along = toDesk.getClockWise();
+		for (int i = -1; i <= 1; i++) {
+			int x = bx + along.getStepX() * i;
+			int z = bz + along.getStepZ() * i;
+			if (p.isAir(x, y - 1, z) || !p.isAir(x, y, z) || !p.isAir(x, y + 1, z)) {
+				return false;
 			}
 		}
+		int sx = bx - toDesk.getStepX();
+		int sz = bz - toDesk.getStepZ();
+		return !p.isAir(sx, y - 1, sz) && p.isAir(sx, y, sz) && p.isAir(sx, y + 1, sz);
 	}
 
 	/**
