@@ -489,6 +489,22 @@ export const LibraryRequestMsg = z.object({
   limit: z.number().int().min(1).max(1000).optional().describe('index only: how many notes to return (default 150, newest first)'),
 });
 
+export const ModelSetMsg = z.object({
+  ...envelope('model.set'),
+  who: z
+    .string()
+    .max(64)
+    .optional()
+    .describe('an agent id or name, "lead", "workers", or "all"; omitted = report what everyone runs and change nothing'),
+  model: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(
+      'the model that agent runs from its next turn, e.g. "opus", "sonnet", "claude-opus-5-5", "gpt-6-astra", or "default" to drop the override and go back to config.json. Omitted = report only.',
+    ),
+});
+
 export const CapsSetMsg = z.object({
   ...envelope('caps.set'),
   repoId: Id.optional().describe('the repo whose agents this changes; omitted = report every repo and change nothing'),
@@ -531,6 +547,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   RepoFixMsg,
   PermissionModeSetMsg,
   CapsSetMsg,
+  ModelSetMsg,
   TeamSetMsg,
   GoalActionMsg,
   LibraryRequestMsg,
@@ -639,6 +656,10 @@ export const CLIENT_MESSAGES = {
   'caps.set': {
     schema: CapsSetMsg,
     doc: 'Change how far one repository\'s agents may reach, from the console (`/caps [repo] [lead|worker] <list>`), without editing config.json or restarting. Answered with `{lines}`, which are also written to the feed. The override is per repo, persists across restarts, and wins over the roles in config.json; an agent whose capabilities changed starts a fresh thread on its next turn.',
+  },
+  'model.set': {
+    schema: ModelSetMsg,
+    doc: 'Change the model an agent runs, from the console (`/model [lead|workers|<agent>] <model>`), without editing config.json or restarting. Answered with `{lines}`, which are also written to the feed. The override persists across restarts and wins over config.json; it takes effect on that agent\'s next turn, and a turn already running finishes on the model it started with.',
   },
   'repo.fix': {
     schema: RepoFixMsg,

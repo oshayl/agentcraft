@@ -54,6 +54,10 @@ export interface Backend {
    */
   onMergeConflict?(task: Task, info: { base: string; branch: string; files: string[]; reason: string }): boolean;
   onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void;
+  /** the model an agent runs now (its `/model` override, else its role's configured one) */
+  modelFor?(agentId: string): string;
+  /** a `/model` override changed: redraw the nameplates */
+  onModelsChanged?(): void;
   /** Is a turn running for this agent right now? Used to decide what it goes back to. */
   isBusy?(agentId: string): boolean;
   onAgentAction(agentId: string, action: 'pause' | 'resume' | 'stop' | 'spawn', arg?: string): Promise<void> | void;
@@ -810,6 +814,45 @@ export class Foreman {
           setTimeout(() => process.exit(RELOAD_EXIT_CODE), 400).unref?.();
         }
         return { lines: r.lines };
+      }
+      case 'model.set': {
+        const workers = this.agents().filter((a) => a.role !== 'lead');
+        const line = (a: { id: string; name: string }) => {
+          const over = this.store.data.agentModels[a.id];
+          return `${a.name}: ${this.backend?.modelFor?.(a.id) ?? over ?? 'default'}${over ? '' : ' (from config.json)'}`;
+        };
+        if (!msg.who || !msg.model) {
+          const lines = this.agents().map(line);
+          if (msg.model) lines.push(`Name who to change: /model <lead|workers|${workers.map((w) => w.id).join('|')}> ${msg.model}`);
+          for (const l of lines) this.bus.feed('system', l);
+          return { lines };
+        }
+        const who = msg.who.trim().toLowerCase();
+        const targets =
+          who === 'all' ? this.agents()
+          : who === 'workers' || who === 'worker' ? workers
+          : who === 'lead' ? this.agents().filter((a) => a.role === 'lead')
+          : [this.agent(this.resolveAgentId(msg.who) ?? '')].filter((a): a is Agent => !!a);
+        if (!targets.length) throw new ClientError(`no agent "${msg.who}" (try lead, workers, all, or ${workers.map((w) => w.id).join(', ')})`);
+        const word = msg.model.trim();
+        const clear = ['default', 'reset', 'config'].includes(word.toLowerCase());
+        for (const a of targets) {
+          if (clear) delete this.store.data.agentModels[a.id];
+          else this.store.data.agentModels[a.id] = word;
+        }
+        this.store.markDirty();
+        // A turn already running keeps the model it started with: the engine was handed it when
+        // the turn began, and changing it mid-flight would make the nameplate lie about the work.
+        const running = targets.filter((a) => a.state === 'running' || a.state === 'thinking' || a.state === 'testing');
+        const names = targets.map((a) => a.name).join(', ');
+        const lines = [
+          clear ? `${names}: back to the model in config.json` : `${names}: ${word} from the next turn`,
+          ...(running.length ? [`${running.map((a) => a.name).join(', ')} ${running.length === 1 ? 'is' : 'are'} mid-turn and will finish on the old model.`] : []),
+        ];
+        this.backend?.onModelsChanged?.();
+        for (const l of lines) this.bus.feed('system', l, { agentId: 'user' });
+        this.emit(this.snapshot());
+        return { lines };
       }
       case 'caps.set': {
         const repos = msg.repoId ? [this.repos.require(msg.repoId)] : this.repos.list();

@@ -247,7 +247,7 @@ export class CodexEngine implements Engine {
       await this.initialize(server);
       const userConfig = (await server.request<any>('config/read', { cwd }, 30_000).catch(() => undefined))?.config;
       if (typeof userConfig?.model === 'string') this.configuredModel ??= userConfig.model;
-      const model = role === 'lead' ? this.cfg.leadModel : this.cfg.workerModel;
+      const model = spec.model ?? (role === 'lead' ? this.cfg.leadModel : this.cfg.workerModel);
       const dynamicTools = spec.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, inputSchema: z.toJSONSchema(z.object(t.shape)) }));
       const thread = {
         cwd,

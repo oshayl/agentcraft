@@ -1254,6 +1254,26 @@ Change how far one repository's agents may reach, from the console (`/caps [repo
 }
 ```
 
+### `model.set`
+
+Change the model an agent runs, from the console (`/model [lead|workers|<agent>] <model>`), without editing config.json or restarting. Answered with `{lines}`, which are also written to the feed. The override persists across restarts and wins over config.json; it takes effect on that agent's next turn, and a turn already running finishes on the model it started with.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `who` | string | no | an agent id or name, "lead", "workers", or "all"; omitted = report what everyone runs and change nothing |
+| `model` | string | no | the model that agent runs from its next turn, e.g. "opus", "sonnet", "claude-opus-5-5", "gpt-6-astra", or "default" to drop the override and go back to config.json. Omitted = report only. |
+
+```json
+{
+  "v": 1,
+  "type": "model.set",
+  "id": "c24",
+  "who": "workers",
+  "model": "claude-opus-5-5"
+}
+```
+
 ### `repo.fix`
 
 Clear what is blocking work, from the console (`/fix [park|unpark|deps] [repo]`), without leaving the game. Answered with `{lines}`, one per repo acted on, which are also written to the feed.

@@ -14,6 +14,7 @@ import dev.agentcraft.client.console.ConsoleCommands.Message;
 import dev.agentcraft.client.console.ConsoleCommands.RepoAdd;
 import dev.agentcraft.client.console.ConsoleCommands.Artifacts;
 import dev.agentcraft.client.console.ConsoleCommands.Caps;
+import dev.agentcraft.client.console.ConsoleCommands.Model;
 import dev.agentcraft.client.console.ConsoleCommands.GoalAction;
 import dev.agentcraft.client.console.ConsoleCommands.Team;
 import dev.agentcraft.client.console.ConsoleCommands.Dev;
@@ -267,6 +268,8 @@ public final class ConsoleActions {
 				ConsoleActions::lines, t.teamId() == null ? "reading\u2026" : "setting up\u2026");
 			case Caps c -> track(Foreman.setCaps(c.repoId(), c.role(), c.caps()), raw, restore, ConsoleActions::lines,
 				c.caps() == null ? "checking\u2026" : "granting\u2026");
+			case Model md -> track(Foreman.setModel(md.who(), md.model()), raw, restore, ConsoleActions::lines,
+				md.model() == null ? "checking\u2026" : "switching\u2026");
 			case RepoFix f -> track(Foreman.fixRepo(f.action(), f.repoId()), raw, restore, ack -> {
 				// the Foreman also feeds each line; this is the inline acknowledgement
 				if (ack.result() != null && ack.result().has("lines")) {

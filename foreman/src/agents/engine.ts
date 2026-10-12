@@ -45,6 +45,8 @@ export interface TurnSpec {
   instructions: string;
   /** the engine session to continue (from TurnStats.sessionId), if any */
   resume?: string;
+  /** the model this turn runs, when it is not the role's configured one (`/model`) */
+  model?: string;
   /** environment for the agent's process and every command it runs (git safety, identity) */
   env: Record<string, string | undefined>;
   /** directories the agent may write besides cwd (a worktree's git dir, for commits) */

@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Team, GoalAction, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Model, Team, GoalAction, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -70,6 +70,10 @@ public final class ConsoleCommands {
 	 * How far one repo's agents may reach. {@code caps}: a capability list, "all", "none" or
 	 * "default" (back to the config file); null = report. {@code role} null = lead and workers.
 	 */
+	/** Which model an agent runs: both null = report. */
+	public record Model(@Nullable String who, @Nullable String model) implements Intent {
+	}
+
 	public record Caps(@Nullable String repoId, @Nullable String role, @Nullable String caps) implements Intent {
 	}
 
@@ -148,6 +152,7 @@ public final class ConsoleCommands {
 		new Command("fix", "/fix [review|land|aside|park|unpark|deps] [repo]", "review or clear what is blocking work"),
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
+		new Command("model", "/model [lead|workers|<agent>] <model>", "which model an agent runs"),
 		new Command("goals", "/goals [clear | remove <id>]", "list goals, or take finished ones off the board"),
 		new Command("team", "/team [<id> lead @agent [repos a,b] [with @a,@b] [floor n] | <id> disband]", "who works on what, and under whom"),
 		new Command("artifacts", "/artifacts [id]", "what the team finished, with its open items"),
@@ -228,6 +233,7 @@ public final class ConsoleCommands {
 			case "fix" -> parseFix(args, s);
 			case "permissions", "perms" -> parsePermissions(args);
 			case "caps", "capabilities", "access" -> parseCaps(args, s);
+			case "model", "models" -> parseModel(args);
 			case "team", "teams" -> parseTeam(args, s);
 			case "goals" -> parseGoals(args);
 			case "artifacts", "artifact", "result", "results" -> new Artifacts(args.isEmpty() ? null : args.get(0));
@@ -413,6 +419,32 @@ public final class ConsoleCommands {
 	 * agentcraft lead full} grants it to the lead alone. The repo comes first because that is
 	 * what the grant is scoped to.
 	 */
+	/** {@code /model} reports; {@code /model <who> <model>} changes; one bare word is the model for every worker. */
+	/** Offered by tab, not a closed set: the Foreman takes any name the engine knows. */
+	private static final List<String> MODEL_NAMES = List.of("opus", "sonnet", "haiku", "claude-opus-5-5", "claude-sonnet-5-5", "gpt-6-astra", "default");
+	private static final java.util.Map<String, String> MODEL_HINTS = java.util.Map.of(
+		"opus", "Claude, the strongest",
+		"sonnet", "Claude, fast and capable",
+		"haiku", "Claude, cheapest",
+		"claude-opus-5-5", "Opus 5.5 exactly",
+		"claude-sonnet-5-5", "Sonnet 5.5 exactly",
+		"gpt-6-astra", "Codex",
+		"default", "back to config.json");
+
+	private static Intent parseModel(List<String> args) {
+		if (args.isEmpty()) {
+			return new Model(null, null);
+		}
+		if (args.size() == 1) {
+			// "/model opus" is the common case: everyone who does the work
+			return new Model("workers", args.get(0));
+		}
+		if (args.size() > 2) {
+			return new Invalid("usage: /model [lead|workers|<agent>] <model>");
+		}
+		return new Model(args.get(0), args.get(1));
+	}
+
 	private static Intent parseCaps(List<String> args, ForemanState s) {
 		if (args.isEmpty()) {
 			return new Caps(null, null, null);
@@ -808,6 +840,7 @@ public final class ConsoleCommands {
 			case Permissions p -> p.mode() == null ? "cycle permissions" : "permissions: " + p.mode();
 			case Caps c -> c.caps() == null ? "show what agents may reach"
 				: (c.role() == null ? "" : c.role() + " in ") + repoName(c.repoId(), s) + ": " + c.caps();
+			case Model md -> md.model() == null ? "show which model each agent runs" : md.who() + ": " + md.model();
 			case GoalAction ga -> ga.goalId() == null ? "clear every finished goal" : "remove " + ga.goalId();
 			case Team t -> t.teamId() == null ? "show the teams"
 				: t.disband() ? "disband " + t.teamId()
@@ -979,6 +1012,23 @@ public final class ConsoleCommands {
 						if (id.startsWith(lower)) {
 							String items = dev.agentcraft.client.library.MemoryIndex.itemCount(e);
 							out.add(new Completion(ts, cursor, id, id, items == null ? e.title() : e.title() + " · " + items, null, null));
+						}
+					}
+				}
+			}
+			case "/model", "/models" -> {
+				if (argIndex == 1) {
+					for (String w : List.of("workers", "lead", "all")) {
+						if (w.startsWith(lower)) {
+							out.add(new Completion(ts, cursor, w + " ", w,
+								w.equals("workers") ? "everyone who does the work" : w.equals("lead") ? "the planner and reviewer" : "the whole studio", null, null));
+						}
+					}
+					agentCompletions(out, ts, cursor, lower.startsWith("@") ? lower.substring(1) : lower, s, false, " ");
+				} else if (argIndex == 2) {
+					for (String m : MODEL_NAMES) {
+						if (m.startsWith(lower)) {
+							out.add(new Completion(ts, cursor, m, m, MODEL_HINTS.get(m), null, null));
 						}
 					}
 				}
@@ -1235,6 +1285,10 @@ public final class ConsoleCommands {
 				m.put("repoId", c.repoId());
 				m.put("role", c.role());
 				m.put("caps", c.caps());
+			}
+			case Model md -> {
+				m.put("who", md.who());
+				m.put("model", md.model());
 			}
 			case AgentAction a -> {
 				m.put("agents", a.agentIds());

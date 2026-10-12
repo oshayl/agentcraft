@@ -379,6 +379,16 @@ export class TeamBackend implements Backend {
     return e.byAgent?.[agentId] ?? (this.isLead(agentId) ? e.lead : e.worker);
   }
 
+  /** The model this agent runs: its `/model` override, else the one its role is configured with. */
+  modelFor(agentId: string): string {
+    return this.fm.store.data.agentModels[agentId] ?? this.engineFor(agentId).model(this.isLead(agentId) ? 'lead' : 'worker');
+  }
+
+  /** A `/model` override changed: every nameplate is redrawn from what each agent now runs. */
+  onModelsChanged(): void {
+    this.showEngines();
+  }
+
   /**
    * Every agent's nameplate shows its engine and model: the configured model until a turn reports
    * the real one (onModel). Off-shift agents too: it is what they would run when spawned.
@@ -387,7 +397,10 @@ export class TeamBackend implements Backend {
     for (const a of this.fm.agents()) {
       const engine = this.engineFor(a.id);
       const reported = this.reportedModels.get(a.id);
-      const model = (reported?.engine === engine.id ? reported.label : undefined) ?? modelLabel(engine.model(this.isLead(a.id) ? 'lead' : 'worker')) ?? engine.label;
+      // an override is what it will run next, so it shows at once; a reported model only counts
+      // while it still describes the model this agent is set to
+      const override = this.fm.store.data.agentModels[a.id];
+      const model = (reported?.engine === engine.id && !override ? reported.label : undefined) ?? modelLabel(this.modelFor(a.id)) ?? engine.label;
       this.fm.setAgent(a.id, { engine: engine.id, model });
     }
   }
@@ -1124,7 +1137,7 @@ export class TeamBackend implements Backend {
         const t = this.fm.tasks.require(job.taskId!);
         systemAppend = workerSystemPrompt(this.fm, agentId, this.fm.repos.requireWorktree(t.repoId!, t.worktree!), capabilities);
       }
-      const model = engine.model(role);
+      const model = this.modelFor(agentId);
       this.fm.agentLog(agentId, 'text', `${resume ? 'Resuming' : 'Starting'} ${job.kind}${job.taskId ? ` ${job.taskId}` : ''} (${engine.id === 'claude' ? model : `${engine.label} ${model}`})`);
       if (job.kind === 'followup' || job.resumed) this.fm.agentLog(agentId, 'text', truncate(job.prompt, 400));
       entry.clock = new TurnClock(TURN_TIMEOUT_MS, () => this.abortTurn(entry, 'timeout'));
@@ -1137,6 +1150,7 @@ export class TeamBackend implements Backend {
           role,
           cwd,
           prompt,
+          model,
           instructions: systemAppend,
           ...(resume ? { resume } : {}),
           env: agentEnv(process.env, { agentId, cwd, capabilities }),

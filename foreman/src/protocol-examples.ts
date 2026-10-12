@@ -220,6 +220,7 @@ export const CLIENT_EXAMPLES: Ex<ClientMessage> = {
   'repo.fix': { v: 1, type: 'repo.fix', id: 'c19', action: 'park', repoId: 'demo-app' },
   'permissions.set': { v: 1, type: 'permissions.set', id: 'c20', mode: 'auto' },
   'caps.set': { v: 1, type: 'caps.set', id: 'c21', repoId: 'demo-app', role: 'lead', caps: 'full' },
+  'model.set': { v: 1, type: 'model.set', id: 'c24', who: 'workers', model: 'claude-opus-5-5' },
   'dev.action': { v: 1, type: 'dev.action', id: 'c23', action: 'check' },
   'library.request': { v: 1, type: 'library.request', id: 'c22', requestId: 'r9', source: 'vault', query: 'agentcraft install' },
 };

@@ -86,6 +86,8 @@ export interface StateData {
    * Keyed by repo id; see capabilities.ts.
    */
   repoCaps: Record<string, RoleCapabilities>;
+  /** agent id -> the model it runs, set from the console (`/model`); wins over config.json */
+  agentModels: Record<string, string>;
   /** opaque backend-owned state (e.g. sim progress) */
   backend: Record<string, unknown>;
 }
@@ -136,6 +138,7 @@ function emptyState(now: number): StateData {
     permissionRules: {},
     permissionMode: 'ask',
     repoCaps: {},
+    agentModels: {},
     backend: {},
   };
 }

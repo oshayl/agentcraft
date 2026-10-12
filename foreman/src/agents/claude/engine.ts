@@ -68,7 +68,7 @@ export class ClaudeEngine implements Engine {
     };
     const options: Options = {
       cwd,
-      model: this.model(role),
+      model: spec.model ?? this.model(role),
       effort: role === 'lead' ? this.cfg.leadEffort : this.cfg.effort,
       maxTurns: role === 'lead' ? this.cfg.maxTurnsLead : this.cfg.maxTurnsWorker,
       settingSources: [],
