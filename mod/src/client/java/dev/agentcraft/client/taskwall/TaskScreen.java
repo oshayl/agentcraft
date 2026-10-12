@@ -456,10 +456,18 @@ public class TaskScreen extends Screen {
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
 		if (event.button() == 0) {
 			for (Btn b : List.copyOf(buttons)) {
-				if (b.enabled() && b.hit(event.x(), event.y())) {
-					press(b);
-					return true;
+				if (!b.hit(event.x(), event.y())) {
+					continue;
 				}
+				if (b.enabled()) {
+					press(b);
+				} else {
+					// A click that lands on a dead button used to go nowhere without a word, which
+					// is indistinguishable from the game ignoring you. Say which it is.
+					feedback = whyOff(b);
+					feedbackError = true;
+				}
+				return true;
 			}
 		}
 		return super.mouseClicked(event, doubleClick);
@@ -476,6 +484,41 @@ public class TaskScreen extends Screen {
 			return true;
 		}
 		return super.keyPressed(event);
+	}
+
+	/**
+	 * The buttons as the last frame laid them out, for {@code dev.taskwall}: id, rect, enabled.
+	 *
+	 * <p>These are the very rectangles a click is tested against, so when a button looks alive and
+	 * does nothing, this says whether it is the geometry or the click that is wrong.
+	 */
+	public com.google.gson.JsonArray buttonRects() {
+		com.google.gson.JsonArray out = new com.google.gson.JsonArray();
+		for (Btn b : List.copyOf(buttons)) {
+			com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+			o.addProperty("id", b.id());
+			o.addProperty("rect", b.x() + " " + b.y() + " " + b.w() + "x" + b.h());
+			o.addProperty("enabled", b.enabled());
+			out.add(o);
+		}
+		return out;
+	}
+
+	/** Why a button is not taking clicks, in the words of whatever turned it off. */
+	private String whyOff(Btn b) {
+		if (!Foreman.connected()) {
+			return "Foreman offline: " + b.label() + " can't be sent yet";
+		}
+		Task t = task();
+		if (t == null) {
+			return b.label() + " is unavailable";
+		}
+		return switch (t.status()) {
+			case CANCELLED -> t.id() + " is cancelled";
+			case DONE -> t.id() + " is done";
+			case TODO -> t.id() + " is already queued";
+			default -> b.label() + " is unavailable for " + t.id();
+		};
 	}
 
 	/** Press a button by id (also used by the dev command): prev next retry prioritize reassign cancel to:&lt;agent&gt;. */

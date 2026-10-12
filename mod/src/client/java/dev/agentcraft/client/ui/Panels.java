@@ -108,4 +108,40 @@ public final class Panels {
 			sprite(g, Kit.SCROLL_GRIP, x + 2, ty + thumbH / 2 - 1, 2, 3);
 		}
 	}
+
+	/** No grab: what {@link #scrollbarPress} returns when the press was not on the bar. */
+	public static final double NO_GRAB = Double.NaN;
+
+	/**
+	 * A press on the bar drawn by {@link #scrollbar}, with the same geometry.
+	 *
+	 * <p>On the thumb it starts a drag and returns where inside the thumb it was taken hold of,
+	 * to pass to {@link #scrollbarDrag}; on the track above or below it jumps there and returns
+	 * {@link #NO_GRAB}, as does a press that misses the bar. Use {@link #onScrollbar} to tell the
+	 * last two apart. The bar is 6 px wide and is given 3 px of slack either side, because a
+	 * six-pixel target is a hard thing to hit with a mouse.
+	 */
+	public static double scrollbarPress(int x, int y, int h, TextUtil.Scroll scroll, double mx, double my) {
+		if (!onScrollbar(x, y, h, scroll, mx, my)) {
+			return NO_GRAB;
+		}
+		int thumbH = Math.max(8, (int) Math.round((double) h * scroll.view() / scroll.content()));
+		double ty = y + (h - thumbH) * scroll.fraction();
+		if (my >= ty && my < ty + thumbH) {
+			return my - ty;
+		}
+		scroll.toFraction((my - y - thumbH / 2.0) / Math.max(1, h - thumbH));
+		return NO_GRAB;
+	}
+
+	/** Is the mouse over the bar (including its slack)? Only true while there is one to draw. */
+	public static boolean onScrollbar(int x, int y, int h, TextUtil.Scroll scroll, double mx, double my) {
+		return scroll.scrollable() && mx >= x - 3 && mx < x + 9 && my >= y && my < y + h;
+	}
+
+	/** Continue a drag started by {@link #scrollbarPress}, with that call's geometry and grab. */
+	public static void scrollbarDrag(int y, int h, TextUtil.Scroll scroll, double grab, double my) {
+		int thumbH = Math.max(8, (int) Math.round((double) h * scroll.view() / scroll.content()));
+		scroll.toFraction((my - grab - y) / Math.max(1, h - thumbH));
+	}
 }

@@ -135,6 +135,7 @@ public final class TaskWallFeature {
 						}
 						selected = open;
 						mc.gui.setScreen(new TaskScreen(open));
+						o.addProperty("opened", open);
 					}
 					if (press != null) {
 						if (!(mc.gui.screen() instanceof TaskScreen ts)) {
@@ -142,6 +143,7 @@ public final class TaskWallFeature {
 						}
 						ts.press(press);
 						o.addProperty("task", ts.taskId());
+						o.add("buttons", ts.buttonRects());
 					}
 					if (aim != null) {
 						o.add("aim", aimJson(mc, aim, onBoard));

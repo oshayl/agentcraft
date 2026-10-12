@@ -75,6 +75,11 @@ public class DecisionScreen extends Screen {
 	private final TextModel answer = new TextModel(4000);
 	private final TextFieldView answerView = new TextFieldView();
 	private final TextUtil.Scroll scroll = new TextUtil.Scroll();
+	/** The body scrollbar as last drawn, and where inside its thumb it was grabbed (NaN = not dragging). */
+	private int sbX;
+	private int sbY;
+	private int sbH;
+	private double scrollGrab = Panels.NO_GRAB;
 	private boolean initialized;
 	private boolean textFocused;
 	private boolean requestChanges;
@@ -717,6 +722,10 @@ public class DecisionScreen extends Screen {
 		if (d == null) {
 			return super.mouseClicked(e, doubleClick);
 		}
+		if (e.button() == 0 && Panels.onScrollbar(sbX, sbY, sbH, scroll, mx, my)) {
+			scrollGrab = Panels.scrollbarPress(sbX, sbY, sbH, scroll, mx, my);
+			return true;
+		}
 		for (Btn b : buttons) {
 			if (mx >= b.x() && mx < b.x() + b.w() && my >= b.y() && my < b.y() + 20) {
 				switch (b.action()) {
@@ -754,6 +763,21 @@ public class DecisionScreen extends Screen {
 			focusText(false);
 		}
 		return super.mouseClicked(e, doubleClick);
+	}
+
+	@Override
+	public boolean mouseDragged(MouseButtonEvent e, double dx, double dy) {
+		if (!Double.isNaN(scrollGrab)) {
+			Panels.scrollbarDrag(sbY, sbH, scroll, scrollGrab, e.y());
+			return true;
+		}
+		return super.mouseDragged(e, dx, dy);
+	}
+
+	@Override
+	public boolean mouseReleased(MouseButtonEvent e) {
+		scrollGrab = Panels.NO_GRAB;
+		return super.mouseReleased(e);
 	}
 
 	@Override
@@ -1214,7 +1238,10 @@ public class DecisionScreen extends Screen {
 			ly += 10;
 		}
 		g.disableScissor();
-		Panels.scrollbar(g, x + w - 8, y + 2, h - 4, scroll, false);
+		sbX = x + w - 8;
+		sbY = y + 2;
+		sbH = h - 4;
+		Panels.scrollbar(g, sbX, sbY, sbH, scroll, false);
 	}
 
 	private List<Row> bodyRows(Decision d, int w) {

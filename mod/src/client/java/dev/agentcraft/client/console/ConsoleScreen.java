@@ -81,6 +81,21 @@ public class ConsoleScreen extends Screen {
 	private int listY;
 	private int listW;
 	private int listH;
+	/** Where inside the thumb the scrollbar was taken hold of; NaN while nothing is being dragged. */
+	private double scrollGrab = Panels.NO_GRAB;
+
+	// the feed's scrollbar, one definition for drawing and for hitting it
+	private int sbX() {
+		return listX + listW - 8;
+	}
+
+	private int sbY() {
+		return listY + 2;
+	}
+
+	private int sbH() {
+		return listH - 4;
+	}
 	private final List<int[]> chipHits = new ArrayList<>(); // x, y, w, h, agent index
 	private final List<String> chipAgents = new ArrayList<>();
 	private int popupX;
@@ -511,6 +526,11 @@ public class ConsoleScreen extends Screen {
 				return true;
 			}
 		}
+		// the feed's scrollbar: grab the thumb, or jump to where the track was clicked
+		if (e.button() == 0 && !overlayOpen() && Panels.onScrollbar(sbX(), sbY(), sbH(), scroll, mx, my)) {
+			scrollGrab = Panels.scrollbarPress(sbX(), sbY(), sbH(), scroll, mx, my);
+			return true;
+		}
 		// a "needs you" line in the feed opens the decision queue (Esc comes back here)
 		if (!overlayOpen() && mx >= listX && mx < listX + listW - 10 && my >= listY + 4 && my < listY + listH - 2) {
 			int i = scroll.offset() + (int) ((my - listY - 4) / ROW);
@@ -527,6 +547,21 @@ public class ConsoleScreen extends Screen {
 			return true;
 		}
 		return super.mouseClicked(e, doubleClick);
+	}
+
+	@Override
+	public boolean mouseDragged(MouseButtonEvent e, double dx, double dy) {
+		if (!Double.isNaN(scrollGrab)) {
+			Panels.scrollbarDrag(sbY(), sbH(), scroll, scrollGrab, e.y());
+			return true;
+		}
+		return super.mouseDragged(e, dx, dy);
+	}
+
+	@Override
+	public boolean mouseReleased(MouseButtonEvent e) {
+		scrollGrab = Panels.NO_GRAB;
+		return super.mouseReleased(e);
 	}
 
 	@Override
@@ -692,7 +727,7 @@ public class ConsoleScreen extends Screen {
 			ly += ROW;
 		}
 		g.disableScissor();
-		Panels.scrollbar(g, listX + listW - 8, listY + 2, listH - 4, scroll, false);
+		Panels.scrollbar(g, sbX(), sbY(), sbH(), scroll, Panels.onScrollbar(sbX(), sbY(), sbH(), scroll, mouseX, mouseY));
 		if (!scroll.following() && scroll.scrollable()) {
 			String more = "↓ newer below";
 			int mw = font.width(more) + 10;

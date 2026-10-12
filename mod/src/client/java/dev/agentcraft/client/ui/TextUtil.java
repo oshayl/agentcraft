@@ -109,6 +109,12 @@ public final class TextUtil {
 			follow = offset >= max();
 		}
 
+		/** Jump to a position on the bar: 0 = top, 1 = bottom. */
+		public void toFraction(double f) {
+			offset = (int) Math.round(Math.max(0, Math.min(1, f)) * max());
+			follow = offset >= max();
+		}
+
 		public void toTop() {
 			offset = 0;
 			follow = max() == 0;
