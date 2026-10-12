@@ -1003,11 +1003,17 @@ export class Foreman {
         for (const d of this.decisions.open().filter((d) => d.taskId === t.id)) this.decisions.cancel(d.id, 'task cancelled');
         this.bus.feed('task', `Task ${t.id} cancelled by ${userName()}: ${t.title}`, { agentId: 'user' });
         break;
-      case 'retry':
+      case 'retry': {
         this.tasks.update(t.id, { ci: 'unknown', blockedReason: null });
         this.tasks.setStatus(t.id, 'todo', { force: true });
-        this.bus.feed('task', `Task ${t.id} queued again: ${t.title}`, { agentId: 'user' });
+        // Retry puts a task back on the board; it does not promise the board can start it. Saying
+        // only "queued again" when the task will then sit for hours behind a dependency reads
+        // exactly like a button that does nothing, which is how it was reported. Name the hold.
+        const unmet = this.tasks.unmetDeps(t);
+        const held = unmet.length ? `, waiting for ${unmet.join(', ')}` : '';
+        this.bus.feed('task', `Task ${t.id} queued again${held}: ${t.title}`, { agentId: 'user' });
         break;
+      }
       case 'prioritize': {
         const top = Math.max(0, ...this.tasks.list().map((x) => x.priority));
         const p = arg !== undefined && arg !== '' && Number.isFinite(Number(arg)) ? Math.trunc(Number(arg)) : top + 1;

@@ -33,6 +33,11 @@ export interface TurnHandle {
   signal: AbortSignal;
   /** why it was aborted: pause | stop | shutdown | cancel | timeout */
   reason(): string | undefined;
+  /**
+   * Hold the turn's deadline while the agent waits on the user; the result releases that hold.
+   * Waiting for a human is not the agent's own time to spend.
+   */
+  waitingOnUser(): () => void;
 }
 
 export type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
@@ -135,7 +140,14 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
         };
         if (turn?.signal.aborted) onAbort();
         else turn?.signal.addEventListener('abort', onAbort, { once: true });
-        const done = await fm.decisions.wait(d.id);
+        // the turn's deadline stops here: the agent is waiting on a person, not working
+        const release = turn?.waitingOnUser() ?? (() => {});
+        let done;
+        try {
+          done = await fm.decisions.wait(d.id);
+        } finally {
+          release();
+        }
         turn?.signal.removeEventListener('abort', onAbort);
         hooks.onWaiting(agentId, false);
         if (turn?.signal.aborted) return withInbox(`Your turn was stopped before ${userName()} answered.`, true);

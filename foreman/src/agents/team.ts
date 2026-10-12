@@ -94,6 +94,8 @@ interface Running {
   tree?: Promise<ProcEntry[] | undefined>;
   /** the (single) clean-up of this turn's processes, once started */
   reaping?: Promise<void>;
+  /** the turn's deadline, held while the agent waits on the user */
+  clock?: TurnClock;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -111,6 +113,64 @@ function toolFingerprint(role: Role): string {
 }
 
 const TURN_TIMEOUT_MS = 45 * 60_000;
+
+/**
+ * A turn's deadline, which runs only while the agent is actually working.
+ *
+ * Time an agent spends waiting for the user to answer a permission prompt or a question is not
+ * the agent's own time, and counting it against the turn killed four turns in one night - one of
+ * them with its tests already passing and its work sitting in review - because nobody was awake
+ * at 3am to click "allow". The clock is held for the length of every such wait and started again
+ * afterwards, so the deadline measures work and only work.
+ *
+ * Holds nest: a second prompt can open while the first is still up.
+ */
+export class TurnClock {
+  private timer: NodeJS.Timeout | undefined;
+  private startedAt = 0;
+  private holds = 0;
+  private stopped = false;
+
+  constructor(
+    private left: number,
+    private readonly expire: () => void,
+  ) {
+    this.run();
+  }
+
+  private run(): void {
+    this.startedAt = Date.now();
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.expire();
+    }, this.left);
+    this.timer.unref?.();
+  }
+
+  /** Hold the clock for one wait. The returned function releases that hold, once. */
+  hold(): () => void {
+    if (this.holds++ === 0 && this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+      // never less than a minute back, so answering a prompt does not expire the turn on the spot
+      this.left = Math.max(60_000, this.left - (Date.now() - this.startedAt));
+    }
+    let released = false;
+    return () => {
+      // releasing twice would drop the count below the real number of waits, restart the clock
+      // under a prompt that is still open, and time the turn out while the user is reading it
+      if (released) return;
+      released = true;
+      if (--this.holds === 0 && !this.stopped) this.run();
+    };
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}
 
 /**
  * Whether one team may start another worker, given the global cap.
@@ -907,7 +967,14 @@ export class TeamBackend implements Backend {
       const onAbort = () => this.fm.decisions.cancel(d.id, 'turn stopped');
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
-      const res = await this.fm.decisions.wait(d.id);
+      // the turn's deadline stops here: the agent is waiting on a person, not working
+      const release = turn.waitingOnUser();
+      let res;
+      try {
+        res = await this.fm.decisions.wait(d.id);
+      } finally {
+        release();
+      }
       signal.removeEventListener('abort', onAbort);
       if (signal.aborted) return { allow: false, message: 'The turn was stopped.' };
       if (prevState) this.fm.setAgent(agentId, prevState);
@@ -963,7 +1030,11 @@ export class TeamBackend implements Backend {
     const agentId = job.agentId;
     const abort = new AbortController();
     const entry: Running = { abort, job };
-    const turn: TurnHandle = { signal: abort.signal, reason: () => entry.reason };
+    const turn: TurnHandle = {
+      signal: abort.signal,
+      reason: () => entry.reason,
+      waitingOnUser: () => entry.clock?.hold() ?? (() => {}),
+    };
     // (pump records this turn as lastTurn right after this synchronous part: this is the previous one)
     const previous = this.lastTurn.get(agentId);
     this.running.set(agentId, entry);
@@ -1009,8 +1080,7 @@ export class TeamBackend implements Backend {
       const model = engine.model(role);
       this.fm.agentLog(agentId, 'text', `${resume ? 'Resuming' : 'Starting'} ${job.kind}${job.taskId ? ` ${job.taskId}` : ''} (${engine.id === 'claude' ? model : `${engine.label} ${model}`})`);
       if (job.kind === 'followup' || job.resumed) this.fm.agentLog(agentId, 'text', truncate(job.prompt, 400));
-      const timer = setTimeout(() => this.abortTurn(entry, 'timeout'), TURN_TIMEOUT_MS);
-      timer.unref?.();
+      entry.clock = new TurnClock(TURN_TIMEOUT_MS, () => this.abortTurn(entry, 'timeout'));
       // messages that arrived while the agent was not in a turn ride along with this prompt
       const unread = this.fm.bus.inbox(agentId, { markRead: true });
       const prompt = unread.length ? `${job.prompt}\n\n[New messages]\n${formatInbox(unread, (id) => this.fm.nameOf(id))}` : job.prompt;
@@ -1045,7 +1115,7 @@ export class TeamBackend implements Backend {
           },
         });
       } finally {
-        clearTimeout(timer);
+        entry.clock.stop();
       }
       if (stats.sessionId) this.recordSession(job.sessionKey, stats.sessionId, model, engine.id, stats, caps, toolset);
       if (stats.authFailed) this.markAuthFailed(engine.authFailedMessage(stats.authFailed));
@@ -1082,7 +1152,7 @@ export class TeamBackend implements Backend {
       const a = this.fm.agent(agentId);
       if (a?.taskId === job.taskId) this.fm.setAgent(agentId, { state: 'idle', station: 'lounge', activity: 'task cancelled', taskId: null, worktree: null });
     } else if (reason === 'timeout') {
-      this.fm.agentLog(agentId, 'error', `turn timed out after ${TURN_TIMEOUT_MS / 60_000} min`);
+      this.fm.agentLog(agentId, 'error', `turn timed out after ${TURN_TIMEOUT_MS / 60_000} min at work (time waiting for you is not counted)`);
       await this.afterTurn(job, { isError: true, subtype: 'timeout', errors: ['turn timed out'] }).catch((e) => this.fm.log.error(`afterTurn ${agentId}: ${(e as Error).stack ?? e}`));
     } else {
       await this.afterTurn(job, stats).catch((e) => this.fm.log.error(`afterTurn ${agentId}: ${(e as Error).stack ?? e}`));
@@ -1483,6 +1553,13 @@ export class TeamBackend implements Backend {
         const wt = this.fm.repos.findWorktree(task.repoId, task.worktree);
         if (wt && wt.status === 'active' && wt.agentId !== task.assignee) this.handOff(task.id, wt.agentId, `reassigned to ${this.fm.nameOf(task.assignee ?? 'user')}`);
       }
+    }
+    // Retried, deps all met, but every worker slot is full: the task is genuinely next and
+    // genuinely not moving, and only the scheduler knows that. Silence here is what makes the
+    // button look broken when the roster is simply busy.
+    if (action === 'retry' && !this.fm.tasks.unmetDeps(task).length && this.workersRunning() >= this.cfg.maxConcurrent) {
+      const busy = [...this.running.keys()].filter((id) => !this.isLead(id)).map((id) => this.fm.nameOf(id));
+      this.fm.bus.feed('task', `${task.id} is next in line: all ${this.cfg.maxConcurrent} worker slots are busy (${busy.join(', ')})`, { agentId: 'user' });
     }
     // unblocked: the worker picks the task straight back up, with the answer in its prompt
     if (action === 'unblock' && task.assignee && !this.isStopped(task.assignee)) {
