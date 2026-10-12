@@ -40,6 +40,7 @@ Exact option labels: merge decisions use `Merge`, `Request changes`, `Reject`; p
 | `id` | string | yes | stable lowercase id, e.g. "kit" |
 | `name` | string | yes | display name, e.g. "Kit" |
 | `role` | [AgentRole](#agentrole) | yes |  |
+| `teamId` | string | no | the team this agent belongs to (Team.id); absent only before the first team exists |
 | `title` | string | no | short descriptive role from cast.json, e.g. "Backend tinkerer" |
 | `color` | string (#RRGGBB) | yes | agent color (scarf/badge/nameplate) |
 | `accent` | string (#RRGGBB) | no | "#RRGGBB" |
@@ -74,6 +75,7 @@ Exact option labels: merge decisions use `Merge`, `Request changes`, `Reject`; p
 | `assignee` | string | no | agent id |
 | `deps` | string[] | yes | task ids that must be done before this one can start |
 | `repoId` | string | no |  |
+| `teamId` | string | no | the team that owns this task, from its repo |
 | `goalId` | string | no |  |
 | `priority` | integer | yes | higher = sooner; default 0 |
 | `branch` | string | no | git branch, e.g. "agentcraft/kit/t2-tag-parser" |
@@ -161,6 +163,7 @@ Exact option labels: merge decisions use `Merge`, `Request changes`, `Reject`; p
 | `progress` | number | yes |  |
 | `status` | `planning` \| `active` \| `done` \| `failed` \| `cancelled` | yes | planning (lead is planning) -> active -> done (every non-cancelled task merged/done); cancelled: every task was cancelled or rejected (back to active if the lead adds a task); failed: planning failed |
 | `repoId` | string | no |  |
+| `teamId` | string | no | the team that owns this goal, from its repo: whose lead plans it and whose workers do it |
 | `createdAt` | integer | yes | epoch milliseconds |
 | `updatedAt` | integer | yes | epoch milliseconds |
 
@@ -240,6 +243,7 @@ Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.
 | `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
 | `foreman` | [ForemanStatus](#foremanstatus) | yes |  |
 | `agents` | [Agent](#agent)[] | yes |  |
+| `teams` | { id: string, name: string, lead: string, members: string[], repos: string[], color: string (#RRGGBB), floor: integer }[] | yes | every team, in display order (the first is the primary one) |
 | `tasks` | [Task](#task)[] | yes |  |
 | `decisions` | [Decision](#decision)[] | yes | open decisions plus the most recent answered ones |
 | `repos` | [Repo](#repo)[] | yes |  |
@@ -266,6 +270,7 @@ Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.
       "id": "kit",
       "name": "Kit",
       "role": "worker",
+      "teamId": "studio",
       "title": "Builder & tester",
       "color": "#2E78C6",
       "accent": "#F4EFE6",
@@ -278,6 +283,23 @@ Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.
       "worktree": "kit-t2",
       "paused": false,
       "active": true
+    }
+  ],
+  "teams": [
+    {
+      "id": "studio",
+      "name": "Studio",
+      "lead": "marlow",
+      "members": [
+        "juniper",
+        "kit",
+        "wren"
+      ],
+      "repos": [
+        "demo-app"
+      ],
+      "color": "#D97757",
+      "floor": 0
     }
   ],
   "tasks": [
@@ -416,6 +438,7 @@ An agent was created or changed (state, station, activity, task...). Replace by 
     "id": "kit",
     "name": "Kit",
     "role": "worker",
+    "teamId": "studio",
     "title": "Builder & tester",
     "color": "#2E78C6",
     "accent": "#F4EFE6",
@@ -428,6 +451,37 @@ An agent was created or changed (state, station, activity, task...). Replace by 
     "worktree": "kit-t2",
     "paused": false,
     "active": true
+  }
+}
+```
+
+### `team.upsert`
+
+A team was created or changed (its lead, members, repos, floor). Replace by `team.id`.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `team` | { id: string, name: string, lead: string, members: string[], repos: string[], color: string (#RRGGBB), floor: integer } | yes |  |
+
+```json
+{
+  "v": 1,
+  "type": "team.upsert",
+  "team": {
+    "id": "studio",
+    "name": "Studio",
+    "lead": "marlow",
+    "members": [
+      "juniper",
+      "kit",
+      "wren"
+    ],
+    "repos": [
+      "demo-app"
+    ],
+    "color": "#D97757",
+    "floor": 0
   }
 }
 ```

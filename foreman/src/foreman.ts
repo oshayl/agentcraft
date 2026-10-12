@@ -27,12 +27,14 @@ import type {
   LogKind,
   Outbound,
   Station,
-  Task, PermissionMode,} from './protocol.js';
+  Task,
+  Team, PermissionMode,} from './protocol.js';
 import { MERGE_WITH_ASIDE_OPTION, MERGE_WITH_LAND_OPTION } from './protocol.js';
 import { formatUncommittedReview, RepoError, RepoManager } from './repos.js';
 import { dev, devBegin, devInFlight, RELOAD_EXIT_CODE } from './selfhost.js';
 import { Store } from './store.js';
 import { TaskError, TaskGraph } from './taskgraph.js';
+import { TeamError, Teams } from './teams.js';
 import { setUserName, userName } from './user.js';
 import { truncate } from './util/text.js';
 
@@ -85,6 +87,7 @@ export class Foreman {
   readonly library: FileLibrary;
   readonly decisions: DecisionQueue;
   readonly repos: RepoManager;
+  readonly teams: Teams;
   readonly notifier: Notifier;
   readonly log: Logger;
   readonly cast: CastMember[];
@@ -109,6 +112,7 @@ export class Foreman {
     this.library = new FileLibrary(opts.config.library);
     this.decisions = new DecisionQueue(this.ctx);
     this.repos = new RepoManager(this.ctx, path.join(opts.config.dataDir, 'worktrees'), { mergeStyle: opts.config.mergeStyle, signMerges: opts.config.signMerges });
+    this.teams = new Teams(this.ctx);
     this.notifier =
       opts.notifier ??
       new Notifier({ enabled: opts.config.notify, silent: opts.config.toastSilent, log: this.log, now });
@@ -122,6 +126,7 @@ export class Foreman {
     if (libs.length) this.status.libraries = libs.map((l) => ({ id: l.id, label: l.label }));
     if (opts.config.backend === 'sim') this.status.message = 'Simulated team (sim backend)';
     this.initRoster();
+    this.initTeams();
     this.decisions.onCreated((d) => this.onDecisionCreated(d));
     this.decisions.onSettled((d) => this.releaseFromUser(d.agentId));
   }
@@ -181,6 +186,48 @@ export class Foreman {
   agents(): Agent[] {
     return this.store.data.agents;
   }
+
+  // ---- teams ------------------------------------------------------------------------------
+
+  /**
+   * The teams, and every agent's membership kept in step with them.
+   *
+   * <p>A state file written before teams existed has none, and one team made out of the roster
+   * it already had behaves exactly as that file did: same lead, same workers, every repository.
+   * Teams only start to matter when a second one is created.
+   */
+  private initTeams(): void {
+    this.teams.onChanged(() => this.syncTeamIds());
+    if (!this.teams.list().length) {
+      const lead = this.cast.find((c) => c.role === 'lead')?.id ?? this.config.claude.workers[0] ?? 'marlow';
+      const members = this.agents().filter((a) => a.id !== lead).map((a) => a.id);
+      this.teams.seed({ lead, members, repos: this.repos.list().map((r) => r.id) });
+    }
+    this.syncTeamIds();
+  }
+
+  /** Agent.teamId is a copy of the team roster, so the mod can colour a nameplate without a join. */
+  private syncTeamIds(): void {
+    for (const a of this.agents()) {
+      const team = this.teams.ofAgent(a.id)?.id;
+      if (a.teamId === team) continue;
+      if (team === undefined) delete a.teamId;
+      else a.teamId = team;
+      this.store.markDirty();
+      this.emit({ type: 'agent.upsert', agent: { ...a } });
+    }
+  }
+
+  /** The team that owns a repo, falling back to the primary one so this is never undefined. */
+  teamForRepo(repoId: string | undefined): Team {
+    return this.teams.ofRepo(repoId) ?? this.teams.primary();
+  }
+
+  /** The team an agent is on (the primary one if it is somehow on none). */
+  teamOf(agentId: string): Team {
+    return this.teams.ofAgent(agentId) ?? this.teams.primary();
+  }
+
 
   agent(id: string): Agent | undefined {
     return this.store.data.agents.find((a) => a.id === id);
@@ -296,10 +343,14 @@ export class Foreman {
     const now = this.ctx.now();
     const goal: Goal = { id: this.store.nextId('g'), text: text.trim(), progress: 0, status: 'planning', createdAt: now, updatedAt: now };
     if (repoId) goal.repoId = repoId;
+    // The repo decides whose goal this is: its team's lead plans it and its team's workers do it.
+    // Nothing else routes work, which is why a repo may only ever belong to one team.
+    const team = this.teamForRepo(repoId);
+    goal.teamId = team.id;
     this.store.data.goals.push(goal);
     this.store.markDirty();
     this.emit({ type: 'goal.upsert', goal: { ...goal } });
-    this.bus.feed('goal', `New goal: ${goal.text}`, { agentId: 'user' });
+    this.bus.feed('goal', `New goal for ${team.name}: ${goal.text}`, { agentId: 'user' });
     return goal;
   }
 
@@ -618,6 +669,7 @@ export class Foreman {
       type: 'snapshot',
       foreman: { ...this.status },
       agents: this.agents().map((a) => ({ ...a })),
+      teams: this.teams.list().map((t) => ({ ...t, members: [...t.members], repos: [...t.repos] })),
       tasks: this.tasks.list().map((t) => ({ ...t, deps: [...t.deps] })),
       decisions: [...recent, ...open].sort((a, b) => a.createdAt - b.createdAt),
       repos: this.repos.list().map((r) => ({ ...r, worktrees: r.worktrees.map((w) => ({ ...w })) })),
@@ -640,7 +692,7 @@ export class Foreman {
       const result = await this.dispatch(msg, reply);
       ack(true, result ? { result } : {});
     } catch (e) {
-      const known = e instanceof ClientError || e instanceof TaskError || e instanceof RepoError || e instanceof DecisionError || e instanceof MemoryError || e instanceof LibraryError;
+      const known = e instanceof ClientError || e instanceof TeamError || e instanceof TaskError || e instanceof RepoError || e instanceof DecisionError || e instanceof MemoryError || e instanceof LibraryError;
       const message = known ? (e as Error).message : `internal error: ${(e as Error).message}`;
       if (!known) this.log.error(`${msg.type}: ${(e as Error).stack ?? e}`);
       reply({ type: 'error', message, ...(msg.id ? { re: msg.id } : {}) });

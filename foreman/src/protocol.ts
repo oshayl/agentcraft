@@ -77,10 +77,22 @@ const HexColor = z.string().regex(/^#[0-9A-Fa-f]{6}$/).describe('"#RRGGBB"');
 // Entities
 // ---------------------------------------------------------------------------------------------
 
+export const Team = z.object({
+  id: Id.describe('stable lowercase id, e.g. "clients"'),
+  name: z.string().describe('display name, e.g. "Clients"'),
+  lead: Id.describe('the agent that plans and reviews for this team'),
+  members: z.array(Id).describe('worker agent ids; the lead is not one of them'),
+  repos: z.array(Id).describe('repo ids this team owns. A repo belongs to exactly one team, which is what keeps two teams out of each other\'s worktrees'),
+  color: HexColor.describe('team colour (floor signage, nameplate trim, HUD)'),
+  floor: z.number().int().describe('which storey of the HQ this team works on; 0 = the top floor, 1 = the one below it'),
+});
+export type Team = z.infer<typeof Team>;
+
 export const Agent = z.object({
   id: Id.describe('stable lowercase id, e.g. "kit"'),
   name: z.string().describe('display name, e.g. "Kit"'),
   role: AgentRole,
+  teamId: Id.optional().describe('the team this agent belongs to (Team.id); absent only before the first team exists'),
   title: z.string().optional().describe('short descriptive role from cast.json, e.g. "Backend tinkerer"'),
   color: HexColor.describe('agent color (scarf/badge/nameplate)'),
   accent: HexColor.optional(),
@@ -113,6 +125,7 @@ export const Task = z.object({
   assignee: Id.optional().describe('agent id'),
   deps: z.array(Id).describe('task ids that must be done before this one can start'),
   repoId: Id.optional(),
+  teamId: Id.optional().describe('the team that owns this task, from its repo'),
   goalId: Id.optional(),
   priority: z.number().int().describe('higher = sooner; default 0'),
   branch: z.string().optional().describe('git branch, e.g. "agentcraft/kit/t2-tag-parser"'),
@@ -197,6 +210,7 @@ export const Goal = z.object({
   progress: z.number().min(0).max(1),
   status: GoalStatus.describe('planning (lead is planning) -> active -> done (every non-cancelled task merged/done); cancelled: every task was cancelled or rejected (back to active if the lead adds a task); failed: planning failed'),
   repoId: Id.optional(),
+  teamId: Id.optional().describe('the team that owns this goal, from its repo: whose lead plans it and whose workers do it'),
   createdAt: Ts,
   updatedAt: Ts,
 });
@@ -282,6 +296,7 @@ export const SnapshotMsg = z.object({
   ...envelope('snapshot'),
   foreman: ForemanStatus,
   agents: z.array(Agent),
+  teams: z.array(Team).describe('every team, in display order (the first is the primary one)'),
   tasks: z.array(Task),
   decisions: z.array(Decision).describe('open decisions plus the most recent answered ones'),
   repos: z.array(Repo),
@@ -292,6 +307,7 @@ export const SnapshotMsg = z.object({
   logs: z.array(AgentLogs).describe('recent log tail per agent (<= 60 entries each)'),
 });
 export const AgentUpsertMsg = z.object({ ...envelope('agent.upsert'), agent: Agent });
+export const TeamUpsertMsg = z.object({ ...envelope('team.upsert'), team: Team });
 export const AgentLogMsg = z.object({ ...envelope('agent.log'), agentId: Id, entries: z.array(LogEntry) });
 export const AgentSayMsg = z.object({
   ...envelope('agent.say'),
@@ -362,6 +378,7 @@ export const ErrorMsg = z.object({
 export const ServerMessage = z.discriminatedUnion('type', [
   SnapshotMsg,
   AgentUpsertMsg,
+  TeamUpsertMsg,
   AgentLogMsg,
   AgentSayMsg,
   TaskUpsertMsg,
@@ -547,6 +564,10 @@ export function formatZodError(err: z.ZodError): string {
 export const SERVER_MESSAGES = {
   snapshot: { schema: SnapshotMsg, doc: 'Full state. Sent in reply to every `hello`; the mod rebuilds its view from it.' },
   'agent.upsert': { schema: AgentUpsertMsg, doc: 'An agent was created or changed (state, station, activity, task...). Replace by `agent.id`.' },
+  'team.upsert': {
+    schema: TeamUpsertMsg,
+    doc: 'A team was created or changed (its lead, members, repos, floor). Replace by `team.id`.',
+  },
   'agent.log': { schema: AgentLogMsg, doc: 'New log lines for an agent monitor (append; keep a bounded tail).' },
   'agent.say': { schema: AgentSayMsg, doc: 'Speech bubble above the agent; also mirrored to the feed.' },
   'task.upsert': { schema: TaskUpsertMsg, doc: 'Task created or changed. Replace by `task.id`.' },

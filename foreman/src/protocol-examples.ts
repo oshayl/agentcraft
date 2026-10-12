@@ -1,6 +1,6 @@
 // One realistic example per message type. Used by docs/protocol.md generation and by the
 // protocol round-trip tests (every example must validate against its schema).
-import type { Agent, ClientMessage, Decision, MemoryEntry, Repo, ServerMessage, Task } from './protocol.js';
+import type { Agent, ClientMessage, Decision, MemoryEntry, Repo, ServerMessage, Task, Team } from './protocol.js';
 
 const ts = 1790850000000;
 
@@ -8,6 +8,7 @@ const agent: Agent = {
   id: 'kit',
   name: 'Kit',
   role: 'worker',
+  teamId: 'studio',
   title: 'Builder & tester',
   color: '#2E78C6',
   accent: '#F4EFE6',
@@ -88,6 +89,16 @@ const memory: MemoryEntry = {
   author: 'marlow',
 };
 
+const team: Team = {
+  id: 'studio',
+  name: 'Studio',
+  lead: 'marlow',
+  members: ['juniper', 'kit', 'wren'],
+  repos: ['demo-app'],
+  color: '#D97757',
+  floor: 0,
+};
+
 type Ex<T> = Record<string, T>;
 
 export const SERVER_EXAMPLES: Ex<ServerMessage> = {
@@ -96,6 +107,7 @@ export const SERVER_EXAMPLES: Ex<ServerMessage> = {
     type: 'snapshot',
     foreman: { version: '0.1.0', backend: 'claude', auth: 'ok', account: 'fal · Claude Enterprise', message: 'Claude (lead opus, workers sonnet)', costUsd: 0.42 },
     agents: [agent],
+    teams: [team],
     tasks: [task],
     decisions: [decision],
     repos: [repo],
@@ -106,6 +118,7 @@ export const SERVER_EXAMPLES: Ex<ServerMessage> = {
     logs: [{ agentId: 'kit', entries: [{ ts: ts + 90_000, kind: 'tool', text: 'Edit src/tags.ts' }] }],
   },
   'agent.upsert': { v: 1, type: 'agent.upsert', agent },
+  'team.upsert': { v: 1, type: 'team.upsert', team },
   'agent.log': {
     v: 1,
     type: 'agent.log',

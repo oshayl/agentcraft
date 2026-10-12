@@ -21,6 +21,7 @@ export interface CreateTaskInput {
   deps?: string[];
   assignee?: string;
   repoId?: string;
+  teamId?: string;
   goalId?: string;
   priority?: number;
   /** the worker's branch starts from this branch (e.g. a fetched pull request) instead of the base */
@@ -40,6 +41,7 @@ export interface TaskPatch {
   summary?: string;
   blockedReason?: string | null;
   repoId?: string;
+  teamId?: string;
 }
 
 const TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
@@ -96,6 +98,7 @@ export class TaskGraph {
     if (input.description) task.description = input.description;
     if (input.assignee) task.assignee = input.assignee;
     if (input.repoId) task.repoId = input.repoId;
+    if (input.teamId) task.teamId = input.teamId;
     if (input.goalId) task.goalId = input.goalId;
     if (input.startBranch) task.startBranch = input.startBranch;
     this.tasks.push(task);
@@ -127,6 +130,7 @@ export class TaskGraph {
     if (patch.ci !== undefined) t.ci = patch.ci;
     if (patch.summary !== undefined) t.summary = patch.summary;
     if (patch.repoId !== undefined) t.repoId = patch.repoId;
+    if (patch.teamId !== undefined) t.teamId = patch.teamId;
     if (patch.blockedReason !== undefined) {
       if (patch.blockedReason === null) delete t.blockedReason;
       else t.blockedReason = patch.blockedReason;

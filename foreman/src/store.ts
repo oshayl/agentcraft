@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { RoleCapabilities } from './capabilities.js';
-import type { Agent, Decision, FeedItem, Goal, LogEntry, Repo, Task } from './protocol.js';
+import type { Agent, Decision, FeedItem, Goal, LogEntry, Repo, Task, Team } from './protocol.js';
 import { ensureDir, readJson, writeJsonAtomic } from './util/fsx.js';
 
 export interface BusMessage {
@@ -64,6 +64,8 @@ export interface StateData {
   version: 1;
   createdAt: number;
   agents: Agent[];
+  /** The teams and who/what is on them (see teams.ts). Seeded from the roster on first run. */
+  teams: Team[];
   tasks: Task[];
   decisions: Decision[];
   repos: Repo[];
@@ -121,6 +123,7 @@ function emptyState(now: number): StateData {
     version: 1,
     createdAt: now,
     agents: [],
+    teams: [],
     tasks: [],
     decisions: [],
     repos: [],
