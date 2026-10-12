@@ -217,10 +217,13 @@ final class Parkour {
 	/** A lit path on the grass from the building to the start, so the course is findable. */
 	static void approach(Plan p, int fromX, int fromZ, int toX, int toZ, int ground) {
 		int steps = (int) Math.round(Math.hypot(toX - fromX, toZ - fromZ));
-		// stop short of the start pad: paving over it replaced the lime concrete with a slab and
-		// left the anchor a block above the surface it names
-		steps = Math.max(0, steps - 2);
-		for (int i = 0; i <= steps; i++) {
+		// Stop clear of the start pad and keep the lamp posts off it. Paving the pad swapped its
+		// lime concrete for a sandstone slab, and the post this drops every seventh step is
+		// offset two blocks sideways - two steps short of the target, that offset lands exactly
+		// on the middle of the pad, which is a lamp post planted in the spot the run starts on
+		// and an anchor pointing at a block somebody is standing inside.
+		int walk = Math.max(0, steps - 3);
+		for (int i = 0; i <= walk; i++) {
 			double f = steps == 0 ? 0 : i / (double) steps;
 			int x = (int) Math.round(fromX + (toX - fromX) * f);
 			int z = (int) Math.round(fromZ + (toZ - fromZ) * f);
@@ -235,9 +238,14 @@ final class Parkour {
 					p.set(x + dx, ty + 1, z + dz, Blocks.AIR.defaultBlockState());
 				}
 			}
-			if (i % 7 == 3) {
-				p.set(x + 2, y + 1, z, Blocks.DARK_OAK_FENCE.defaultBlockState());
-				p.set(x + 2, y + 2, z, St.lantern(Blocks.LANTERN, false));
+			// a lamp to the side of the path, square to the way it is going, and never near the end
+			if (i % 7 == 3 && i < walk - 6) {
+				double len = Math.max(1, Math.hypot(toX - fromX, toZ - fromZ));
+				int sx = x + (int) Math.round(-(toZ - fromZ) / len * 2);
+				int sz = z + (int) Math.round((toX - fromX) / len * 2);
+				int sy = p.top(sx, sz);
+				p.set(sx, sy, sz, Blocks.DARK_OAK_FENCE.defaultBlockState());
+				p.set(sx, sy + 1, sz, St.lantern(Blocks.LANTERN, false));
 			}
 		}
 	}

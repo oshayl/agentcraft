@@ -134,8 +134,13 @@ public final class SchematicHqBuilder implements HqBuilder {
 		if (b != null) {
 			int doorZ = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
 			int[] storeys = lit.floors(groundY);
+			// a different half of the cast watching from each floor, so no two floors of screens
+			// say the same thing
+			List<String> cast = new ArrayList<>(Cast.ids());
 			for (int i = 1; i < storeys.length; i++) {
-				if (SchematicFitOut.openFloor(p, y0 + storeys[i], doorZ, SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3]) > 0) {
+				List<String> watching = new ArrayList<>(cast.subList(0, cast.size()));
+				java.util.Collections.rotate(watching, -((i - 1) * Math.max(1, cast.size() / 2)));
+				if (SchematicFitOut.openFloor(p, y0 + storeys[i], doorZ, SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3], watching) > 0) {
 					opened++;
 				}
 			}
