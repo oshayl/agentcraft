@@ -201,6 +201,15 @@ export function mayStartWorker(s: {
   return s.runningForTeam < share || !s.othersWaiting;
 }
 
+/**
+ * How many workers of one engine may run at once, when that engine says so.
+ *
+ * An engine's own limit is not a budget to be shared out. Codex refuses a fifth concurrent
+ * agent; counting that refusal against the whole roster idled four Claude workers for a limit
+ * that was never theirs, which is what "I added more agents and nothing got faster" was.
+ */
+export const ENGINE_POOL: Readonly<Record<string, number>> = { codex: 4 };
+
 
 /** Reuse the user's `gh` login for agents' pushes; no token is placed in the environment. */
 const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
@@ -742,6 +751,17 @@ export class TeamBackend implements Backend {
     });
   }
 
+  /** Workers of one engine in a turn right now (leads excluded, as everywhere else). */
+  private engineRunning(engine: string): number {
+    return [...this.running.keys()].filter((id) => !this.isLead(id) && this.engineFor(id).id === engine).length;
+  }
+
+  /** Has this worker's engine got a slot free? An engine with no stated limit always has. */
+  private engineHasRoom(agentId: string): boolean {
+    const cap = ENGINE_POOL[this.engineFor(agentId).id];
+    return cap === undefined || this.engineRunning(this.engineFor(agentId).id) < cap;
+  }
+
   private isFree(w: string, teamId?: string): boolean {
     const a = this.fm.agent(w);
     if (!a || !a.active || a.paused || this.isStopped(w) || !this.team.includes(w)) return false;
@@ -799,13 +819,15 @@ export class TeamBackend implements Backend {
           this.fm.tasks.update(t.id, { assignee: null, assigneePinned: false });
           t.assignee = undefined;
         }
-        if (t.assignee && this.isFree(t.assignee, teamId)) {
+        if (t.assignee && this.isFree(t.assignee, teamId) && this.engineHasRoom(t.assignee)) {
           w = t.assignee;
         } else {
           // A planner's assignment is a preference for work that has not started. A user pin
           // and an existing worktree are ownership: neither is silently taken away.
           if (t.assignee && (t.assigneePinned || (t.worktree && !this.isStopped(t.assignee)))) continue;
-          w = this.fm.teams.get(teamId)?.members.find((x) => this.isFree(x, teamId));
+          // A worker whose engine is full is not free for this: pass over it rather than let one
+          // saturated engine hold up a task another engine's worker could start now.
+          w = this.fm.teams.get(teamId)?.members.find((x) => this.isFree(x, teamId) && this.engineHasRoom(x));
         }
         if (!w) continue;
         try {

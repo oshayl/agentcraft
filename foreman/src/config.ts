@@ -352,7 +352,10 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv = process.env)
       leadEffort: effort(flags['lead-effort'] ?? flags.effort ?? fileClaude.leadEffort, 'medium'),
       maxTurnsLead: num(flags['max-turns-lead'] ?? flags['max-turns'] ?? fileClaude.maxTurnsLead, 40),
       maxTurnsWorker: num(flags['max-turns-worker'] ?? flags['max-turns'] ?? fileClaude.maxTurnsWorker, 80),
-      maxConcurrent: Math.max(1, num(flags['max-concurrent'] ?? fileClaude.maxConcurrent, 3)),
+      // Scales with the roster, because a flat 3 meant hiring a fifth, sixth and seventh worker
+      // bought nothing: they sat in the lounge while three ran. ENGINE_POOL still holds each
+      // engine to its own limit, so this is a ceiling for the machine and the bill, not a target.
+      maxConcurrent: Math.max(1, num(flags['max-concurrent'] ?? fileClaude.maxConcurrent, Math.max(3, workers.length))),
       workers,
       ciCommand: str(flags.ci) ?? str(fileClaude.ciCommand),
       maxBudgetUsdPerTurn: flags['max-budget'] !== undefined ? num(flags['max-budget'], 0) || undefined : (fileClaude.maxBudgetUsdPerTurn as number | undefined),
