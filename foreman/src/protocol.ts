@@ -501,6 +501,17 @@ export const CapsSetMsg = z.object({
     ),
 });
 
+export const TeamSetMsg = z.object({
+  ...envelope('team.set'),
+  teamId: Id.optional().describe('the team to create or change; omitted = report every team and change nothing'),
+  name: z.string().max(60).optional().describe('display name; creating a team without one names it after its id'),
+  lead: Id.optional().describe('agent that plans and reviews for this team. Required when the team is being created'),
+  members: z.array(Id).max(16).optional().describe('the whole worker roster, replacing whatever it was. Agents move off whichever team had them'),
+  repos: z.array(Id).max(64).optional().describe('the whole repo set, replacing whatever it was. A repo moves off whichever team had it: it belongs to exactly one'),
+  floor: z.number().int().min(0).max(8).optional().describe('which storey of the HQ this team works on (0 = the top floor)'),
+  disband: z.boolean().optional().describe('remove the team; its repos and workers go to the first remaining team'),
+});
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMsg,
   GoalSubmitMsg,
@@ -513,6 +524,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   RepoFixMsg,
   PermissionModeSetMsg,
   CapsSetMsg,
+  TeamSetMsg,
   LibraryRequestMsg,
   DevActionMsg,
 ]);
@@ -596,6 +608,10 @@ export const CLIENT_MESSAGES = {
   'agent.action': { schema: AgentActionMsg, doc: 'Pause/resume/stop an agent, or spawn (activate) an off-shift worker.' },
   'diff.request': { schema: DiffRequestMsg, doc: 'Ask for the structured diff of a worktree. Answered with `diff` (same requestId).' },
   'repo.add': { schema: RepoAddMsg, doc: 'Register a local git repo (console: `/repo add <path>`).' },
+  'team.set': {
+    schema: TeamSetMsg,
+    doc: 'Create, change or disband a team (console: `/team`). With no `teamId` it reports every team and changes nothing. A repo and an agent each belong to exactly one team, so naming them here takes them off whichever team had them.',
+  },
   'permissions.set': {
     schema: PermissionModeSetMsg,
     doc: 'Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-game key). Never affects hard denials or merges.',

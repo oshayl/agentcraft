@@ -1118,6 +1118,40 @@ Register a local git repo (console: `/repo add <path>`).
 }
 ```
 
+### `team.set`
+
+Create, change or disband a team (console: `/team`). With no `teamId` it reports every team and changes nothing. A repo and an agent each belong to exactly one team, so naming them here takes them off whichever team had them.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `teamId` | string | no | the team to create or change; omitted = report every team and change nothing |
+| `name` | string | no | display name; creating a team without one names it after its id |
+| `lead` | string | no | agent that plans and reviews for this team. Required when the team is being created |
+| `members` | string[] | no | the whole worker roster, replacing whatever it was. Agents move off whichever team had them |
+| `repos` | string[] | no | the whole repo set, replacing whatever it was. A repo moves off whichever team had it: it belongs to exactly one |
+| `floor` | integer | no | which storey of the HQ this team works on (0 = the top floor) |
+| `disband` | boolean | no | remove the team; its repos and workers go to the first remaining team |
+
+```json
+{
+  "v": 1,
+  "type": "team.set",
+  "id": "c24",
+  "teamId": "clients",
+  "name": "Clients",
+  "lead": "juniper",
+  "members": [
+    "rowan",
+    "tove"
+  ],
+  "repos": [
+    "travis-murphy"
+  ],
+  "floor": 1
+}
+```
+
 ### `permissions.set`
 
 Set or cycle how ask-verdicts are handled (console: `/permissions`, or the in-game key). Never affects hard denials or merges.

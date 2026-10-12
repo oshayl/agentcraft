@@ -111,7 +111,36 @@ function toolFingerprint(role: Role): string {
 }
 
 const TURN_TIMEOUT_MS = 45 * 60_000;
-const LEAD = 'marlow';
+
+/**
+ * Whether one team may start another worker, given the global cap.
+ *
+ * <p>The cap is global and stays that way: it is the user's rate limit and their bill, and it
+ * does not get bigger because the work was filed under two names. What more than one team needs
+ * is that none of them can take all of it - a team that plans twenty tasks would otherwise fill
+ * every slot and the other team's single task would wait behind all twenty, which is what makes
+ * a second team feel slower than no second team at all.
+ *
+ * <p>So each team is guaranteed an equal share of the cap rounded down, never less than one, and
+ * anything above that share is only taken while no other team is waiting for a slot. Leads are
+ * not counted: they run in short bursts to plan and review, and a lead that cannot start is a
+ * team that never starts.
+ *
+ * <p>With one team this is exactly the old rule, so nothing changes until a second one exists.
+ */
+export function mayStartWorker(s: {
+  maxConcurrent: number;
+  teams: number;
+  running: number;
+  runningForTeam: number;
+  othersWaiting: boolean;
+}): boolean {
+  if (s.running >= s.maxConcurrent) return false;
+  if (s.teams < 2) return true;
+  const share = Math.max(1, Math.floor(s.maxConcurrent / s.teams));
+  return s.runningForTeam < share || !s.othersWaiting;
+}
+
 
 /** Reuse the user's `gh` login for agents' pushes; no token is placed in the environment. */
 const GH_CREDENTIAL_HELPER = '!gh auth git-credential';
@@ -228,14 +257,55 @@ export class TeamBackend implements Backend {
     return s;
   }
 
+  /**
+   * Every worker on shift, across every team. The team rosters are what say who exists;
+   * `cfg.workers` only seeds the first team on a fresh profile.
+   */
   get team(): string[] {
-    return this.cfg.workers.filter((w) => this.fm.agent(w));
+    return this.fm.teams.list().flatMap((t) => t.members).filter((w) => this.fm.agent(w));
+  }
+
+  /** Every team's lead. */
+  private get leads(): string[] {
+    return this.fm.teams.list().map((t) => t.lead);
+  }
+
+  private isLead(agentId: string): boolean {
+    return this.fm.teams.isLead(agentId);
+  }
+
+  /** The workers of one team that are on shift. */
+  private workersOf(teamId: string): string[] {
+    return (this.fm.teams.get(teamId)?.members ?? []).filter((w) => this.fm.agent(w));
+  }
+
+  /**
+   * Whose lead this is. Every turn belongs to a team - a goal's, a task's, or the team of the
+   * agent that asked - and that team's lead is the only one that may plan it, review it or be
+   * told about it. Where nothing names a team the primary team answers, so this never returns
+   * nothing and no work is quietly dropped.
+   */
+  private leadFor(of: { goalId?: string; taskId?: string; repoId?: string; agentId?: string }): string {
+    return this.fm.teams.get(this.teamFor(of))?.lead ?? this.fm.teams.primary().lead;
+  }
+
+  /** The team id a job belongs to (see {@link leadFor}). */
+  private teamFor(of: { goalId?: string; taskId?: string; repoId?: string; agentId?: string }): string {
+    const goal = of.goalId ? this.fm.goal(of.goalId) : undefined;
+    if (goal?.teamId) return goal.teamId;
+    const task = of.taskId ? this.fm.tasks.get(of.taskId) : undefined;
+    if (task?.teamId) return task.teamId;
+    const repoId = of.repoId ?? task?.repoId ?? goal?.repoId;
+    const byRepo = this.fm.teams.ofRepo(repoId);
+    if (byRepo) return byRepo.id;
+    if (of.agentId) return this.fm.teamOf(of.agentId).id;
+    return this.fm.teams.primary().id;
   }
 
   /** The engine that runs an agent's turns. */
   engineFor(agentId: string): Engine {
     const e = this.opts.engines;
-    return e.byAgent?.[agentId] ?? (agentId === LEAD ? e.lead : e.worker);
+    return e.byAgent?.[agentId] ?? (this.isLead(agentId) ? e.lead : e.worker);
   }
 
   /**
@@ -246,19 +316,19 @@ export class TeamBackend implements Backend {
     for (const a of this.fm.agents()) {
       const engine = this.engineFor(a.id);
       const reported = this.reportedModels.get(a.id);
-      const model = (reported?.engine === engine.id ? reported.label : undefined) ?? modelLabel(engine.model(a.id === LEAD ? 'lead' : 'worker')) ?? engine.label;
+      const model = (reported?.engine === engine.id ? reported.label : undefined) ?? modelLabel(engine.model(this.isLead(a.id) ? 'lead' : 'worker')) ?? engine.label;
       this.fm.setAgent(a.id, { engine: engine.id, model });
     }
   }
 
   /** Every engine on the team (each is checked at start). */
   private enginesInUse(): Engine[] {
-    return [...new Set([LEAD, ...this.team].map((id) => this.engineFor(id)))];
+    return [...new Set([...this.leads, ...this.team].map((id) => this.engineFor(id)))];
   }
 
   /** e.g. "Claude (lead opus, workers sonnet)" or "Claude lead opus · Codex workers gpt-5" */
   private teamLabel(): string {
-    const lead = this.engineFor(LEAD);
+    const lead = this.engineFor(this.fm.teams.primary().lead);
     const workers = [...new Set(this.team.map((w) => this.engineFor(w)))];
     // aliases as configured ("opus"), full model ids as display names ("claude-opus-5-5" -> "Opus 5.5")
     const m = (e: Engine, role: Role) => (/^[a-z]+$/.test(e.model(role)) ? e.model(role) : (modelLabel(e.model(role)) ?? e.model(role)));
@@ -282,7 +352,7 @@ export class TeamBackend implements Backend {
 
   async start(): Promise<void> {
     for (const a of this.fm.agents()) {
-      const onTeam = (a.id === LEAD || this.team.includes(a.id)) && !this.isStopped(a.id);
+      const onTeam = this.fm.teams.ofAgent(a.id) !== undefined && !this.isStopped(a.id);
       this.fm.setAgent(a.id, { active: onTeam });
       if (!onTeam) this.fm.setAgent(a.id, { state: 'idle', station: 'lounge', activity: this.isStopped(a.id) ? 'stopped - off shift' : 'off shift' });
       else if (a.activity === 'off shift' || a.activity.startsWith('stopped')) this.fm.setAgent(a.id, { activity: 'ready' });
@@ -299,7 +369,7 @@ export class TeamBackend implements Backend {
       this.recover();
     }
     // the user's messages that no agent read before the restart
-    for (const id of [LEAD, ...this.team]) this.deliverPending(id);
+    for (const id of [...this.leads, ...this.team]) this.deliverPending(id);
     void this.fm.repos.sweepPendingRemovals().catch((e) => this.fm.log.debug(`sweep: ${(e as Error).message}`));
     this.tick();
   }
@@ -324,8 +394,8 @@ export class TeamBackend implements Backend {
     this.authFailed = false;
     // Say plainly how far agents may reach: a granted capability changes what the whole team
     // can do to the outside world, so it should never be visible only in a config file.
-    const lead = describeCapabilities(this.capsFor(LEAD, 'lead'));
-    const worker = describeCapabilities(this.capsFor(this.team.find((a) => a !== LEAD) ?? 'worker', 'worker'));
+    const lead = describeCapabilities(this.capsFor(this.fm.teams.primary().lead, 'lead'));
+    const worker = describeCapabilities(this.capsFor(this.team[0] ?? 'worker', 'worker'));
     this.fm.log.info(`capabilities: lead ${lead} | workers ${worker}`);
     for (const repoId of Object.keys(this.capabilityConfig().byRepo ?? {})) {
       const r = this.fm.repos.get(repoId);
@@ -394,19 +464,20 @@ export class TeamBackend implements Backend {
     const st = this.st;
     // goals still planning with nobody planning them
     for (const g of this.fm.goals().filter((x) => x.status === 'planning')) {
-      const leadOnIt = st.inflight[LEAD]?.goalId === g.id || this.hasQueued(LEAD, (j) => j.goalId === g.id) || this.openQuestion(LEAD) !== undefined;
-      if (leadOnIt || this.isStopped(LEAD)) continue;
+      const lead = this.leadFor({ goalId: g.id });
+      const leadOnIt = st.inflight[lead]?.goalId === g.id || this.hasQueued(lead, (j) => j.goalId === g.id) || this.openQuestion(lead) !== undefined;
+      if (leadOnIt || this.isStopped(lead)) continue;
       if (this.fm.tasks.forGoal(g.id).length) this.promoteGoal(g, 'recovered');
       else {
         const repo = g.repoId ? this.fm.repos.get(g.repoId) : undefined;
         if (!repo) continue;
         this.fm.log.info(`recover: re-planning ${g.id}`);
-        this.enqueue({ kind: 'plan', agentId: LEAD, goalId: g.id, sessionKey: `${LEAD}:${g.id}`, fresh: !this.fm.store.data.sessions[`${LEAD}:${g.id}`]?.sessionId, prompt: planPrompt(this.fm, g, repo.path, repo.branch) });
+        this.enqueue({ kind: 'plan', agentId: lead, goalId: g.id, sessionKey: `${lead}:${g.id}`, fresh: !this.fm.store.data.sessions[`${lead}:${g.id}`]?.sessionId, prompt: planPrompt(this.fm, g, repo.path, repo.branch) });
       }
     }
     // doing tasks whose worker is not working on them: back on the board (the session resumes)
     for (const t of this.fm.tasks.list()) {
-      if (t.status !== 'doing' || !t.assignee || t.assignee === LEAD) continue;
+      if (t.status !== 'doing' || !t.assignee || this.isLead(t.assignee)) continue;
       const w = t.assignee;
       if (st.inflight[w]?.taskId === t.id || this.hasQueued(w, (j) => j.taskId === t.id)) continue;
       if (this.openQuestion(w)?.taskId === t.id) continue; // resumes with the answer
@@ -424,7 +495,8 @@ export class TeamBackend implements Backend {
       if (t.status !== 'review' || !t.worktree) continue;
       if (this.fm.decisions.open().some((d) => d.taskId === t.id)) continue;
       if (Object.values(st.inflight).some((i) => i.taskId === t.id)) continue;
-      if (this.reviewing.has(t.id) || this.hasQueued(LEAD, (j) => j.taskId === t.id) || (t.assignee && this.hasQueued(t.assignee, (j) => j.taskId === t.id))) continue;
+      const lead = this.leadFor({ taskId: t.id });
+      if (this.reviewing.has(t.id) || this.hasQueued(lead, (j) => j.taskId === t.id) || (t.assignee && this.hasQueued(t.assignee, (j) => j.taskId === t.id))) continue;
       void this.afterWorkerDone(t.id);
     }
   }
@@ -538,32 +610,36 @@ export class TeamBackend implements Backend {
       throw new ClientError(`Claude is not available: ${this.fm.status.message ?? 'auth failed'}`);
     }
     const repo = this.fm.repos.require(goal.repoId!);
-    if (this.isStopped(LEAD)) {
-      this.setStopped(LEAD, false);
-      this.fm.bus.feed('system', 'Marlow is back on shift for the new goal', { agentId: LEAD });
+    // Whose goal this is was settled when it was created, from its repo (see Foreman.createGoal).
+    const teamId = goal.teamId ?? this.fm.teamForRepo(goal.repoId).id;
+    const lead = this.leadFor({ goalId: goal.id });
+    if (this.isStopped(lead)) {
+      this.setStopped(lead, false);
+      this.fm.bus.feed('system', `${this.fm.nameOf(lead)} is back on shift for the new goal`, { agentId: lead });
     }
-    for (const w of [LEAD, ...this.team]) if (!this.isStopped(w)) this.fm.setAgent(w, { active: true });
-    this.fm.setAgent(LEAD, { state: 'thinking', station: 'meeting', activity: 'reading the goal', repoId: repo.id });
-    const pulls = await this.intakePulls(goal, repo.path);
-    this.enqueue({ kind: 'plan', agentId: LEAD, goalId: goal.id, sessionKey: `${LEAD}:${goal.id}`, fresh: true, prompt: planPrompt(this.fm, goal, repo.path, repo.branch, pulls) });
+    // only this team wakes up: the other team's workers are not idle, they are busy elsewhere
+    for (const w of this.fm.teams.roster(teamId)) if (!this.isStopped(w)) this.fm.setAgent(w, { active: true });
+    this.fm.setAgent(lead, { state: 'thinking', station: 'meeting', activity: 'reading the goal', repoId: repo.id });
+    const pulls = await this.intakePulls(goal, repo.path, lead);
+    this.enqueue({ kind: 'plan', agentId: lead, goalId: goal.id, sessionKey: `${lead}:${goal.id}`, fresh: true, prompt: planPrompt(this.fm, goal, repo.path, repo.branch, pulls) });
   }
 
   /**
    * A goal that mentions pull requests ("#12") on a GitHub repository: fetch them before the lead
    * plans (see pulls.ts), announce them in the feed and keep a brief in shared memory.
    */
-  private async intakePulls(goal: Goal, repoPath: string): Promise<PullRequest[]> {
+  private async intakePulls(goal: Goal, repoPath: string, lead: string): Promise<PullRequest[]> {
     const refs = prRefs(goal.text);
     if (!refs.length || !(await this.pullFetcher.origin(repoPath))) return [];
-    this.fm.setAgent(LEAD, { state: 'reading', station: 'library', activity: `fetching ${refs.length} pull request${refs.length === 1 ? '' : 's'}` });
-    this.fm.bus.feed('system', `Fetching ${refs.length} pull request${refs.length === 1 ? '' : 's'} from GitHub`, { agentId: LEAD });
+    this.fm.setAgent(lead, { state: 'reading', station: 'library', activity: `fetching ${refs.length} pull request${refs.length === 1 ? '' : 's'}` });
+    this.fm.bus.feed('system', `Fetching ${refs.length} pull request${refs.length === 1 ? '' : 's'} from GitHub`, { agentId: lead });
     const { pulls, errors } = await this.pullFetcher.fetch(repoPath, refs);
-    for (const p of pulls) this.fm.bus.feed('task', `PR #${p.number} by @${p.author}: ${p.title}`, { agentId: LEAD });
-    for (const e of errors) this.fm.bus.feed('error', `PR ${e}`, { agentId: LEAD });
+    for (const p of pulls) this.fm.bus.feed('task', `PR #${p.number} by @${p.author}: ${p.title}`, { agentId: lead });
+    for (const e of errors) this.fm.bus.feed('error', `PR ${e}`, { agentId: lead });
     if (pulls.length) {
-      this.fm.memory.write({ scope: 'shared', title: `Pull requests for ${goal.id}`, body: pullBriefs(pulls), author: LEAD, mode: 'replace' });
+      this.fm.memory.write({ scope: this.fm.teamOf(lead).id, title: `Pull requests for ${goal.id}`, body: pullBriefs(pulls), author: lead, mode: 'replace' });
     }
-    this.fm.setAgent(LEAD, { state: 'thinking', station: 'meeting', activity: 'reading the goal' });
+    this.fm.setAgent(lead, { state: 'thinking', station: 'meeting', activity: 'reading the goal' });
     return pulls;
   }
 
@@ -571,7 +647,8 @@ export class TeamBackend implements Backend {
     if (goal.status !== 'planning') return;
     const n = this.fm.tasks.forGoal(goal.id).length;
     this.fm.setGoal(goal.id, { status: 'active' });
-    this.fm.bus.feed('plan', `Marlow planned the goal into ${n} task${n === 1 ? '' : 's'}${why === 'recovered' ? ' (picked up after a restart)' : ''}`, { agentId: LEAD });
+    const lead = this.leadFor({ goalId: goal.id });
+    this.fm.bus.feed('plan', `${this.fm.nameOf(lead)} planned the goal into ${n} task${n === 1 ? '' : 's'}${why === 'recovered' ? ' (picked up after a restart)' : ''}`, { agentId: lead });
     this.tick();
   }
 
@@ -587,29 +664,61 @@ export class TeamBackend implements Backend {
     this.tickTimer.unref?.();
   }
 
-  private workersRunning(): number {
-    return [...this.running.keys()].filter((id) => id !== LEAD).length;
+  /** Workers running a turn right now, over everything or on one team. */
+  private workersRunning(teamId?: string): number {
+    const ids = [...this.running.keys()].filter((id) => !this.isLead(id));
+    return teamId === undefined ? ids.length : ids.filter((id) => this.fm.teamOf(id).id === teamId).length;
   }
 
-  private isFree(w: string): boolean {
+  private mayStart(teamId: string, waiting: Set<string>): boolean {
+    return mayStartWorker({
+      maxConcurrent: this.cfg.maxConcurrent,
+      teams: this.fm.teams.list().length,
+      running: this.workersRunning(),
+      runningForTeam: this.workersRunning(teamId),
+      othersWaiting: [...waiting].some((other) => other !== teamId),
+    });
+  }
+
+  private isFree(w: string, teamId?: string): boolean {
     const a = this.fm.agent(w);
     if (!a || !a.active || a.paused || this.isStopped(w) || !this.team.includes(w)) return false;
+    // a worker only ever takes its own team's work: the repo it would be given belongs to them
+    if (teamId !== undefined && this.fm.teamOf(w).id !== teamId) return false;
     if (this.running.has(w) || (this.queues.get(w)?.length ?? 0) > 0) return false;
     return !this.fm.tasks.list().some((t) => t.assignee === w && t.status === 'doing');
   }
 
   private async schedule(): Promise<void> {
     if (this.authFailed || this.stopping) return;
+    // Ready work gathered per team before anything starts, for two reasons: the fair share has
+    // to know which teams are waiting, and the teams are then taken a task at a time in turn
+    // rather than a goal at a time, so a long queue never gets in front of a short one.
+    const queued = new Map<string, Array<{ goal: Goal; task: Task }>>();
     for (const goal of this.fm.goals().filter((g) => g.status === 'active')) {
-      for (const t of this.fm.tasks.ready(goal.id)) {
-        if (this.workersRunning() >= this.cfg.maxConcurrent) return;
+      const teamId = this.teamFor({ goalId: goal.id });
+      const list = queued.get(teamId) ?? [];
+      for (const t of this.fm.tasks.ready(goal.id)) list.push({ goal, task: t });
+      if (list.length) queued.set(teamId, list);
+    }
+    const waiting = new Set(queued.keys());
+    for (let round = 0; queued.size; round++) {
+      for (const [teamId, list] of [...queued]) {
+        const next = list[round];
+        if (next === undefined) {
+          queued.delete(teamId);
+          waiting.delete(teamId);
+          continue;
+        }
+        const { goal, task: t } = next;
+        if (!this.mayStart(teamId, waiting)) continue;
         if (this.handoffs.has(t.id)) continue; // the previous worker's turn is still winding down
         let w: string | undefined;
         if (t.assignee && this.team.includes(t.assignee) && !this.isStopped(t.assignee)) {
-          if (!this.isFree(t.assignee)) continue; // wait for the intended worker
+          if (!this.isFree(t.assignee, teamId)) continue; // wait for the intended worker
           w = t.assignee;
         } else {
-          w = this.team.find((x) => this.isFree(x));
+          w = this.fm.teams.get(teamId)?.members.find((x) => this.isFree(x, teamId));
         }
         if (!w) continue;
         try {
@@ -621,6 +730,7 @@ export class TeamBackend implements Backend {
           this.retryLater();
         }
       }
+      if (this.workersRunning() >= this.cfg.maxConcurrent) break;
     }
     // pump queues that were held back by the concurrency cap
     for (const id of this.queues.keys()) this.pump(id);
@@ -673,7 +783,7 @@ export class TeamBackend implements Backend {
     if (!a || a.paused || !a.active || this.isStopped(agentId)) return;
     const q = this.queues.get(agentId);
     if (!q?.length) return;
-    if (agentId !== LEAD && this.workersRunning() >= this.cfg.maxConcurrent) return;
+    if (!this.isLead(agentId) && this.workersRunning() >= this.cfg.maxConcurrent) return;
     const job = q.shift()!;
     const p = this.runJob(job).finally(() => {
       this.turnPromises.delete(p);
@@ -688,8 +798,8 @@ export class TeamBackend implements Backend {
   }
 
   private cwdFor(job: Job): { cwd: string; role: 'lead' | 'worker'; repoId: string } {
-    if (job.agentId === LEAD) {
-      const goal = job.goalId ? this.fm.goal(job.goalId) : this.fm.currentGoal();
+    if (this.isLead(job.agentId)) {
+      const goal = job.goalId ? this.fm.goal(job.goalId) : this.fm.currentGoalFor(this.fm.teamOf(job.agentId).id);
       const repo = goal?.repoId ? this.fm.repos.get(goal.repoId) : this.fm.repos.defaultRepo();
       if (!repo) throw new Error('no repo for the lead');
       return { cwd: repo.path, role: 'lead', repoId: repo.id };
@@ -715,8 +825,8 @@ export class TeamBackend implements Backend {
   /** For the Foreman's `/caps` report: what this repository's lead and workers may reach. */
   capabilitiesFor(repoId: string): { lead: AgentCapabilities; worker: AgentCapabilities } {
     return {
-      lead: this.capsFor(LEAD, 'lead', repoId),
-      worker: this.capsFor(this.team.find((a) => a !== LEAD) ?? 'worker', 'worker', repoId),
+      lead: this.capsFor(this.fm.teams.leadForRepo(repoId), 'lead', repoId),
+      worker: this.capsFor(this.fm.teams.ofRepo(repoId)?.members[0] ?? this.team[0] ?? 'worker', 'worker', repoId),
     };
   }
 
@@ -1019,8 +1129,9 @@ export class TeamBackend implements Backend {
 
   private async afterTurn(job: Job, stats: TurnStats | undefined): Promise<void> {
     const failed = !stats || stats.isError;
-    if (job.agentId === LEAD) {
-      this.fm.setAgent(LEAD, failed ? { state: 'error', station: 'meeting', activity: `turn failed: ${this.failure(stats)}` } : { state: 'idle', station: 'meeting', activity: 'watching the task wall' });
+    if (this.isLead(job.agentId)) {
+      const lead = job.agentId;
+      this.fm.setAgent(lead, failed ? { state: 'error', station: 'meeting', activity: `turn failed: ${this.failure(stats)}` } : { state: 'idle', station: 'meeting', activity: 'watching the task wall' });
       // any lead turn for a goal that is still planning (plan, or a plan resumed after a
       // restart / an answer) settles the goal: tasks -> active
       const goal = job.goalId ? this.fm.goal(job.goalId) : undefined;
@@ -1029,12 +1140,12 @@ export class TeamBackend implements Backend {
         if (n > 0) this.promoteGoal(goal, 'planned');
         else if (failed) {
           this.fm.setGoal(goal.id, { status: 'failed' });
-          this.fm.bus.feed('error', `Marlow's planning turn ended without tasks${stats?.errors.length ? `: ${stats.errors.join('; ')}` : ''}`, { agentId: LEAD });
+          this.fm.bus.feed('error', `${this.fm.nameOf(lead)}'s planning turn ended without tasks${stats?.errors.length ? `: ${stats.errors.join('; ')}` : ''}`, { agentId: lead });
         } else if (job.kind === 'plan') {
           // nothing to do (e.g. the user said "ignore it"): close the goal instead of leaving it
           // "active" at 0% forever; a task the lead adds to it later makes it active again
           this.fm.setGoal(goal.id, { status: 'cancelled', progress: 0 });
-          this.fm.bus.feed('goal', `Marlow planned no tasks: goal closed (${truncate(goal.text, 80)})`, { agentId: LEAD });
+          this.fm.bus.feed('goal', `${this.fm.nameOf(lead)} planned no tasks: goal closed (${truncate(goal.text, 80)})`, { agentId: lead });
         }
       }
       if (job.kind === 'review' && job.taskId) {
@@ -1072,7 +1183,7 @@ export class TeamBackend implements Backend {
         this.fm.tasks.setStatus(t.id, 'blocked', { reason: failed ? `session ended: ${stats?.subtype ?? stats?.errors.join('; ') ?? 'error'}` : 'worker stopped without changes', force: true });
         // a failed turn is an error (red); a worker that gave up is blocked
         this.fm.setAgent(job.agentId, failed ? { state: 'error', station: 'desk', activity: `${t.id}: ${this.failure(stats)}` } : { state: 'blocked', station: 'desk', activity: `${t.id} blocked` });
-        this.fm.bus.send(job.agentId, LEAD, `${t.id} is blocked: ${this.fm.tasks.get(t.id)?.blockedReason}`);
+        this.fm.bus.send(job.agentId, this.leadFor({ taskId: t.id, agentId: job.agentId }), `${t.id} is blocked: ${this.fm.tasks.get(t.id)?.blockedReason}`);
         this.fm.notify('warn', `${this.fm.nameOf(job.agentId)}: ${t.id} ${failed ? 'failed' : 'is blocked'} (${this.fm.tasks.get(t.id)?.blockedReason ?? ''}) - /task ${t.id} retry when ready`);
       }
       return;
@@ -1120,10 +1231,11 @@ export class TeamBackend implements Backend {
       this.sendBackToWorker(t.id, `CI failed for ${t.id} (${ci.command}):\n${ci.output}\n\nFix the failures, re-run the tests, then update_task("${t.id}", status "review", summary).`);
       return;
     }
-    if (this.cfg.leadReview && !this.isStopped(LEAD)) {
+    const lead = this.leadFor({ taskId: t.id });
+    if (this.cfg.leadReview && !this.isStopped(lead)) {
       const diff = await this.fm.repos.diff(t.repoId, t.worktree);
-      this.fm.setAgent(LEAD, { state: 'reading', station: 'mergestation', activity: `reviewing ${t.id}` });
-      this.enqueue({ kind: 'review', agentId: LEAD, taskId: t.id, ...(t.goalId ? { goalId: t.goalId } : {}), sessionKey: `${LEAD}:${t.goalId ?? 'adhoc'}`, prompt: reviewPrompt(this.fm, this.fm.tasks.require(t.id), renderDiffText(diff.files), diff.stats, ci) });
+      this.fm.setAgent(lead, { state: 'reading', station: 'mergestation', activity: `reviewing ${t.id}` });
+      this.enqueue({ kind: 'review', agentId: lead, taskId: t.id, ...(t.goalId ? { goalId: t.goalId } : {}), sessionKey: `${lead}:${t.goalId ?? 'adhoc'}`, prompt: reviewPrompt(this.fm, this.fm.tasks.require(t.id), renderDiffText(diff.files), diff.stats, ci) });
     } else {
       await this.openMergeDecision(t, t.summary ?? 'Work complete.');
     }
@@ -1131,12 +1243,13 @@ export class TeamBackend implements Backend {
 
   private async openMergeDecision(t: Task, summary: string): Promise<void> {
     const wt = this.fm.repos.requireWorktree(t.repoId!, t.worktree!);
+    const lead = this.leadFor({ taskId: t.id });
     // A branch that already landed has nothing to approve. Asking anyway puts a card on the
     // board that refuses every answer, which is what happened to t54: merged, reviewed again,
     // and then four clicks on Merge with the refusal scrolled off the bottom of the card.
     if (wt.status === 'merged') {
       this.fm.tasks.setStatus(t.id, 'done', { viaMerge: true, force: true });
-      this.fm.bus.feed('merge', `${t.id} was already merged into ${wt.base}: nothing to approve`, { agentId: t.assignee ?? LEAD });
+      this.fm.bus.feed('merge', `${t.id} was already merged into ${wt.base}: nothing to approve`, { agentId: t.assignee ?? this.leadFor({ taskId: t.id }) });
       return;
     }
     // A merge is refused while the checkout holding the base branch has modified tracked files.
@@ -1165,7 +1278,7 @@ export class TeamBackend implements Backend {
         }`
       : '';
     this.fm.createDecision({
-      agentId: LEAD,
+      agentId: lead,
       kind: 'merge',
       question: `Merge ${t.id} "${t.title}" (${wt.branch}) into ${wt.base}?`,
       // the extra option only exists while the user's own work is in the way, and only when
@@ -1180,7 +1293,7 @@ export class TeamBackend implements Backend {
       repoId: t.repoId!,
       worktree: wt.id,
     });
-    if (!this.isStopped(LEAD)) this.fm.setAgent(LEAD, { state: 'idle', station: 'mergestation', activity: `awaiting your review of ${t.id}` });
+    if (!this.isStopped(lead)) this.fm.setAgent(lead, { state: 'idle', station: 'mergestation', activity: `awaiting your review of ${t.id}` });
   }
 
   /** Resume the worker's task session with feedback (lead/user changes, CI failure). */
@@ -1201,9 +1314,26 @@ export class TeamBackend implements Backend {
 
   // ---- user intents -------------------------------------------------------------------------
 
+  /**
+   * Which lead a message with no addressee reaches: the one whose team's goal is newest, and the
+   * primary team's when nothing has been asked of anybody yet.
+   */
+  private leadForLooseMessage(): string {
+    const goals = this.fm.goals();
+    for (let i = goals.length - 1; i >= 0; i--) {
+      const lead = this.leadFor({ goalId: goals[i]!.id });
+      if (!this.isStopped(lead)) return lead;
+    }
+    return this.fm.teams.primary().lead;
+  }
+
   /** `note`: extra instructions for the agent only (not shown in the feed). */
   onUserMessage(to: string, text: string, note?: string): void {
-    const id = to === 'all' ? LEAD : to;
+    // "all" means the lead - but which one? The team whose goal is newest: with two teams there
+    // is no single current goal, and a message answered by the wrong lead is worse than one that
+    // asks. The feed names who it reached, because "I told them" and "they never heard" look the
+    // same from the console otherwise.
+    const id = to === 'all' ? this.leadForLooseMessage() : to;
     const a = this.fm.agent(id);
     if (!a) return;
     if (this.isStopped(id)) {
@@ -1220,25 +1350,26 @@ export class TeamBackend implements Backend {
     const consume = () => this.fm.bus.markRead(id, mine.map((m) => m.id));
     const named = this.fm.mentionBrief(body);
     const prompt = `Message from ${userName()}: ${body}\n${named}\n${note ? `${note}\n\n` : ''}Respond briefly with send_message(to "user") and act on it if needed (lead: create or update tasks; worker: adjust your work).`;
-    if (id === LEAD) {
-      const goal = this.fm.currentGoal();
+    if (this.isLead(id)) {
+      const goal = this.fm.currentGoalFor(this.fm.teamOf(id).id);
       if (!goal) {
         consume();
-        this.fm.bus.send(LEAD, 'user', 'No goal yet - type one in the console and I will plan it.');
+        this.fm.bus.send(id, 'user', 'No goal yet - type one in the console and I will plan it.');
         return;
       }
       consume();
-      this.enqueue({ kind: 'followup', agentId: LEAD, goalId: goal.id, sessionKey: `${LEAD}:${goal.id}`, prompt });
+      this.enqueue({ kind: 'followup', agentId: id, goalId: goal.id, sessionKey: `${id}:${goal.id}`, prompt });
       return;
     }
+    const lead = this.leadFor({ agentId: id });
     const t = this.fm.tasks.list().filter((x) => x.assignee === id && (x.status === 'doing' || x.status === 'review')).pop();
     consume();
     if (!t) {
-      this.fm.bus.send(id, 'user', 'I am not on a task right now - Marlow will pick that up.');
-      this.fm.bus.send('user', LEAD, `(for ${this.fm.nameOf(id)}) ${body}`);
+      this.fm.bus.send(id, 'user', `I am not on a task right now - ${this.fm.nameOf(lead)} will pick that up.`);
+      this.fm.bus.send('user', lead, `(for ${this.fm.nameOf(id)}) ${body}`);
       const name = this.fm.nameOf(id);
       this.onUserMessage(
-        LEAD,
+        lead,
         `(originally for ${name}) ${body}`,
         `${name} is not on a task, and workers only read messages while they work on one. If this needs ${name} to do something, create a task for it with create_task (assignee "${id}"); a send_message alone will not reach ${name}.`,
       );
@@ -1253,16 +1384,18 @@ export class TeamBackend implements Backend {
    * its thread. Skipped when the goal produced nothing to report on.
    */
   onGoalComplete(goal: Goal): void {
-    if (this.isStopped(LEAD) || this.stopping) return;
+    const lead = this.leadFor({ goalId: goal.id });
+    if (this.isStopped(lead) || this.stopping) return;
     const tasks = this.fm.tasks.list().filter((t) => t.goalId === goal.id && t.status !== 'cancelled');
     if (!tasks.length) return;
-    const sessionKey = `${LEAD}:${goal.id}`;
+    const sessionKey = `${lead}:${goal.id}`;
     if (this.reported.has(goal.id)) return;
     this.reported.add(goal.id);
-    // everything the team wrote while this goal ran: the plan, and every worker's review note
-    const notes = this.fm.memory.list().filter((e) => e.scope === 'shared' && e.updated >= goal.createdAt);
-    this.enqueue({ kind: 'report', agentId: LEAD, goalId: goal.id, sessionKey, prompt: reportPrompt(this.fm, goal, notes) });
-    this.fm.agentLog(LEAD, 'text', `Goal ${goal.id} finished: writing the artifact`);
+    // everything this team wrote while the goal ran: the plan, and every worker's review note
+    const scope = this.fm.teamOf(lead).id;
+    const notes = this.fm.memory.list().filter((e) => (e.scope === scope || e.scope === 'shared') && e.updated >= goal.createdAt);
+    this.enqueue({ kind: 'report', agentId: lead, goalId: goal.id, sessionKey, prompt: reportPrompt(this.fm, goal, notes) });
+    this.fm.agentLog(lead, 'text', `Goal ${goal.id} finished: writing the artifact`);
   }
 
   /** A turn is running for this agent right now. */
@@ -1277,8 +1410,8 @@ export class TeamBackend implements Backend {
         const ans = [d.answer?.option, d.answer?.text].filter(Boolean).join(' — ') || '(cancelled)';
         const inf = this.st.inflight[d.agentId];
         const t = d.taskId ? this.fm.tasks.get(d.taskId) : undefined;
-        const goalId = inf?.goalId ?? t?.goalId ?? (d.agentId === LEAD ? this.fm.currentGoal()?.id : undefined);
-        const sessionKey = inf?.sessionKey ?? (d.agentId === LEAD ? `${LEAD}:${goalId ?? 'adhoc'}` : t ? `${d.agentId}:${t.id}` : undefined);
+        const goalId = inf?.goalId ?? t?.goalId ?? (this.isLead(d.agentId) ? this.fm.currentGoalFor(this.fm.teamOf(d.agentId).id)?.id : undefined);
+        const sessionKey = inf?.sessionKey ?? (this.isLead(d.agentId) ? `${d.agentId}:${goalId ?? 'adhoc'}` : t ? `${d.agentId}:${t.id}` : undefined);
         if (sessionKey) {
           // keep the interrupted job's kind, so its after-turn step (e.g. plan -> active) still runs
           this.enqueue({
@@ -1298,13 +1431,15 @@ export class TeamBackend implements Backend {
       const t = this.fm.tasks.get(d.taskId);
       if (!t) return;
       if (d.answer?.option === 'Merge' && t.status === 'done') {
+        const lead = this.leadFor({ taskId: t.id });
         if (t.assignee && this.fm.agent(t.assignee)?.taskId === t.id) this.fm.setAgent(t.assignee, { state: 'idle', station: 'lounge', activity: `${t.id} merged`, taskId: null, worktree: null });
-        if (!this.isStopped(LEAD)) this.fm.setAgent(LEAD, { state: 'idle', station: 'meeting', activity: 'watching the task wall' });
+        if (!this.isStopped(lead)) this.fm.setAgent(lead, { state: 'idle', station: 'meeting', activity: 'watching the task wall' });
         const g = t.goalId ? this.fm.goal(t.goalId) : undefined;
         if (g && this.fm.tasks.goalComplete(g.id)) {
-          this.fm.bus.send(LEAD, 'user', `Everything for "${truncate(g.text, 80)}" is merged. Nice working with you.`);
-          for (const w of this.team) if (!this.isStopped(w)) this.fm.setAgent(w, { state: 'done', station: 'lounge', activity: 'goal done' });
-          if (!this.isStopped(LEAD)) this.fm.setAgent(LEAD, { state: 'done', station: 'meeting', activity: 'goal done' });
+          this.fm.bus.send(lead, 'user', `Everything for "${truncate(g.text, 80)}" is merged. Nice working with you.`);
+          // only this team knocks off: the other team is still working on something else
+          for (const w of this.workersOf(this.fm.teamOf(lead).id)) if (!this.isStopped(w)) this.fm.setAgent(w, { state: 'done', station: 'lounge', activity: 'goal done' });
+          if (!this.isStopped(lead)) this.fm.setAgent(lead, { state: 'done', station: 'meeting', activity: 'goal done' });
         }
         this.tick();
       } else if (d.answer?.option === 'Request changes') {
@@ -1331,7 +1466,7 @@ export class TeamBackend implements Backend {
   onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void {
     if (action === 'cancel' || action === 'reassign') {
       for (const [id, r] of this.running) {
-        if (r.job.taskId === task.id && id !== LEAD && (action === 'cancel' || task.assignee !== id)) this.abortTurn(r, 'cancel');
+        if (r.job.taskId === task.id && !this.isLead(id) && (action === 'cancel' || task.assignee !== id)) this.abortTurn(r, 'cancel');
       }
       for (const [id, q] of this.queues) this.queues.set(id, q.filter((j) => j.taskId !== task.id || (action === 'reassign' && task.assignee === id)));
       // reassigned: the new worker continues from the old worker's branch once that turn is over
@@ -1367,7 +1502,11 @@ export class TeamBackend implements Backend {
       this.fm.setAgent(agentId, { state: 'idle', activity: 'paused' });
     } else if (action === 'resume' || action === 'spawn') {
       const wasStopped = this.isStopped(agentId);
-      if (action === 'spawn' && agentId !== LEAD && !this.cfg.workers.includes(agentId)) this.cfg.workers.push(agentId);
+      // spawning someone nobody has rostered puts them on the primary team, so they can be given work
+      if (action === 'spawn' && !this.isLead(agentId) && !this.fm.teams.ofAgent(agentId)) {
+        const t = this.fm.teams.primary();
+        this.fm.teams.update(t.id, { members: [...t.members, agentId] });
+      }
       if (wasStopped || action === 'spawn') {
         this.setStopped(agentId, false);
         this.fm.setAgent(agentId, { active: true, paused: false, state: 'idle', station: 'lounge', activity: 'ready' });
@@ -1377,7 +1516,7 @@ export class TeamBackend implements Backend {
       this.pausedJobs.delete(agentId);
       if (job) this.enqueue(job);
       else this.pump(agentId);
-      if (agentId === LEAD && wasStopped) this.reconcile();
+      if (this.isLead(agentId) && wasStopped) this.reconcile();
       // messages the user sent while the agent was off shift or paused
       this.deliverPending(agentId);
     } else if (action === 'stop') {
@@ -1387,7 +1526,7 @@ export class TeamBackend implements Backend {
       this.pausedJobs.delete(agentId);
       delete this.st.inflight[agentId];
       this.withdrawDecisions(agentId, `${name} was stopped`);
-      if (agentId !== LEAD) {
+      if (!this.isLead(agentId)) {
         for (const t of this.fm.tasks.list().filter((x) => x.assignee === agentId && x.status === 'doing')) {
           // back on the board, but held until the agent's turn is really over and its work is committed;
           // the next worker then continues from this branch

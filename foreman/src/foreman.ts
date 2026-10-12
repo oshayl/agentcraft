@@ -199,10 +199,13 @@ export class Foreman {
   private initTeams(): void {
     this.teams.onChanged(() => this.syncTeamIds());
     if (!this.teams.list().length) {
-      const lead = this.cast.find((c) => c.role === 'lead')?.id ?? this.config.claude.workers[0] ?? 'marlow';
-      const members = this.agents().filter((a) => a.id !== lead).map((a) => a.id);
+      const lead = this.cast.find((c) => c.role === 'lead')?.id ?? 'marlow';
+      // the configured roster, not every face in the cast: --workers is who is on shift, and a
+      // team made of everybody would quietly put agents the user left off back to work
+      const members = this.config.claude.workers.filter((w) => w !== lead && this.agent(w));
       this.teams.seed({ lead, members, repos: this.repos.list().map((r) => r.id) });
     }
+    this.teams.adopt(this.repos.list().map((r) => r.id));
     this.syncTeamIds();
   }
 
@@ -333,6 +336,17 @@ export class Foreman {
   currentGoal(): Goal | undefined {
     const g = this.store.data.goals;
     return g[g.length - 1];
+  }
+
+  /**
+   * The latest goal of one team. With two teams there is no single "current goal": the lead of
+   * the client team planning against whatever the product team last submitted is exactly the
+   * bleed that having two leads is meant to stop.
+   */
+  currentGoalFor(teamId: string): Goal | undefined {
+    const g = this.store.data.goals;
+    for (let i = g.length - 1; i >= 0; i--) if ((g[i]!.teamId ?? this.teams.primary().id) === teamId) return g[i];
+    return undefined;
   }
 
   goal(id: string): Goal | undefined {
@@ -734,7 +748,9 @@ export class Foreman {
       }
       case 'repo.add': {
         const r = await this.repos.add(msg.path);
-        this.bus.feed('system', `Repo connected: ${r.name} (${r.branch})`);
+        // a repo with no team belongs to nobody, and nobody can be given a goal in it
+        this.teams.adopt([r.id]);
+        this.bus.feed('system', `Repo connected: ${r.name} (${r.branch}) — ${this.teamForRepo(r.id).name}`);
         return { repoId: r.id };
       }
       case 'permissions.set': {
@@ -807,6 +823,54 @@ export class Foreman {
         };
         const caps = word === 'default' || word === 'reset' ? undefined : parse();
         const line = this.setRepoCapabilities(msg.repoId, msg.role, caps);
+        return { lines: [line] };
+      }
+      case 'team.set': {
+        const describe = (t: Team) =>
+          `${t.id}${t.id === this.teams.primary().id ? ' (primary)' : ''}: ${t.name} — lead ${this.nameOf(t.lead)}, ` +
+          `${t.members.length ? t.members.map((m) => this.nameOf(m)).join(', ') : 'no workers'} | ` +
+          `${t.repos.length ? t.repos.join(', ') : 'no repos'} | floor ${t.floor}`;
+        if (!msg.teamId) {
+          const lines = this.teams.list().map(describe);
+          const loose = this.repos.list().filter((r) => !this.teams.ofRepo(r.id)).map((r) => r.id);
+          if (loose.length) lines.push(`unowned repos: ${loose.join(', ')}`);
+          lines.push('/team <id> lead <agent> [repos a,b] [members a,b] — create or change; /team <id> disband');
+          for (const l of lines) this.bus.feed('system', l);
+          return { lines };
+        }
+        if (msg.disband) {
+          const gone = this.teams.require(msg.teamId);
+          const name = gone.name;
+          this.teams.remove(msg.teamId);
+          this.syncTeamIds();
+          const line = `Disbanded ${name}; its repos and workers are now ${this.teams.primary().name}'s`;
+          this.bus.feed('system', line);
+          return { lines: [line] };
+        }
+        for (const id of [...(msg.members ?? []), ...(msg.lead ? [msg.lead] : [])]) this.requireAgent(id);
+        for (const id of msg.repos ?? []) this.repos.require(id);
+        const existing = this.teams.get(msg.teamId);
+        const team = existing
+          ? this.teams.update(msg.teamId, {
+              ...(msg.name !== undefined ? { name: msg.name } : {}),
+              ...(msg.lead !== undefined ? { lead: msg.lead } : {}),
+              ...(msg.members !== undefined ? { members: msg.members } : {}),
+              ...(msg.repos !== undefined ? { repos: msg.repos } : {}),
+              ...(msg.floor !== undefined ? { floor: msg.floor } : {}),
+            })
+          : this.teams.create({
+              id: msg.teamId,
+              name: msg.name ?? msg.teamId,
+              lead: msg.lead ?? (() => { throw new ClientError(`a new team needs a lead: /team ${msg.teamId} lead <agent>`); })(),
+              ...(msg.members !== undefined ? { members: msg.members } : {}),
+              ...(msg.repos !== undefined ? { repos: msg.repos } : {}),
+              ...(msg.floor !== undefined ? { floor: msg.floor } : {}),
+            });
+        this.syncTeamIds();
+        // a new lead has to be on shift, or its team's goals sit in planning forever
+        if (msg.lead) void this.backend?.onAgentAction(msg.lead, 'spawn');
+        const line = `${existing ? 'Updated' : 'Created'} ${describe(team)}`;
+        this.bus.feed('system', line);
         return { lines: [line] };
       }
       case 'repo.fix': {
@@ -959,6 +1023,8 @@ export class Foreman {
         this.log.error(`could not add repo ${p}: ${(e as Error).message}`);
       }
     }
+    // repos added from the command line, and any the state file had before teams existed
+    this.teams.adopt(this.repos.list().map((r) => r.id));
     for (const r of this.repos.list()) {
       if (!fs.existsSync(r.path)) {
         this.log.warn(`repo ${r.id} path is gone: ${r.path}`);

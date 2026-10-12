@@ -127,9 +127,18 @@ export class Memory {
     return this.entries.get(id);
   }
 
-  /** Shared notes, this agent's own private ones, and every artifact (those are for everyone). */
-  visibleTo(agentId: string): MemoryEntry[] {
-    return this.list().filter((e) => e.scope === 'shared' || e.scope === ARTIFACT_SCOPE || e.scope === agentId);
+  /**
+   * What one agent can read: the house notes, its own team's, its own private ones, and every
+   * artifact (those are for everyone).
+   *
+   * <p>A team's notes are the team's. The point of a second team is that one client's working
+   * notes are not in the other client's lead's context window - not privacy, accuracy: a lead
+   * that reads "the deploy is blocked on billing" about somebody else's project will act on it.
+   */
+  visibleTo(agentId: string, teamScope?: string): MemoryEntry[] {
+    return this.list().filter(
+      (e) => e.scope === 'shared' || e.scope === ARTIFACT_SCOPE || e.scope === agentId || (teamScope !== undefined && e.scope === teamScope),
+    );
   }
 
   /** The artifacts, newest first: the team's durable output, one per finished goal. */
@@ -142,14 +151,14 @@ export class Memory {
     return this.fileFor(id);
   }
 
-  search(query: string, agentId?: string): MemoryEntry[] {
+  search(query: string, agentId?: string, teamScope?: string): MemoryEntry[] {
     const q = query.toLowerCase();
-    const pool = agentId ? this.visibleTo(agentId) : this.list();
+    const pool = agentId ? this.visibleTo(agentId, teamScope) : this.list();
     return pool.filter((e) => e.title.toLowerCase().includes(q) || e.body.toLowerCase().includes(q));
   }
 
   /**
-   * Write (create or replace/append) an entry. `scope` is "shared" or an agent id.
+   * Write (create or replace/append) an entry. `scope` is "shared", a team id or an agent id.
    * `slug` defaults to slugify(title).
    */
   write(input: { scope: string; title: string; body: string; author: string; slug?: string; mode?: 'replace' | 'append' }): MemoryEntry {

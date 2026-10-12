@@ -147,15 +147,18 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
     ),
     tool(
       'write_memory',
-      'Write a markdown note to memory. scope "shared" (whole team) or "private" (only you). mode "append" adds to an existing note with the same title.',
+      'Write a markdown note to memory. scope "team" (your team, the default — project notes go here), "shared" (every team in the studio: house rules, conventions) or "private" (only you). mode "append" adds to an existing note with the same title.',
       {
         title: z.string(),
         body: z.string().describe('markdown'),
-        scope: z.enum(['shared', 'private']).optional(),
+        scope: z.enum(['team', 'shared', 'private']).optional(),
         mode: z.enum(['replace', 'append']).optional(),
       },
       async ({ title, body, scope, mode }) => {
-        const e = fm.memory.write({ scope: scope === 'private' ? agentId : 'shared', title, body, author: agentId, mode: mode ?? 'replace' });
+        // "shared" meant the whole team when there was only one; it still reaches everyone, and a
+        // thread resumed from before teams keeps passing it, so it has to go on meaning that
+        const where = scope === 'private' ? agentId : scope === 'shared' ? 'shared' : fm.teamOf(agentId).id;
+        const e = fm.memory.write({ scope: where, title, body, author: agentId, mode: mode ?? 'replace' });
         fm.bus.feed('memory', `${fm.nameOf(agentId)} wrote memory: ${e.title}`, { agentId });
         return withInbox(`Saved memory ${e.id}.`);
       },
@@ -165,12 +168,18 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
       'Read memory. With id: that note. With query: matching notes. With neither: list all notes you can see.',
       { id: z.string().optional(), query: z.string().optional() },
       async ({ id, query }) => {
+        const teamScope = fm.teamOf(agentId).id;
         if (id) {
-          const e = fm.memory.get(id) ?? fm.memory.get(`shared/${id}`) ?? fm.memory.get(`${ARTIFACT_SCOPE}/${id}`) ?? fm.memory.get(`${agentId}/${id}`);
-          if (!e || (e.scope !== 'shared' && e.scope !== ARTIFACT_SCOPE && e.scope !== agentId)) return fail(`no memory ${id}`);
+          const e =
+            fm.memory.get(id) ??
+            fm.memory.get(`${teamScope}/${id}`) ??
+            fm.memory.get(`shared/${id}`) ??
+            fm.memory.get(`${ARTIFACT_SCOPE}/${id}`) ??
+            fm.memory.get(`${agentId}/${id}`);
+          if (!e || (e.scope !== 'shared' && e.scope !== teamScope && e.scope !== ARTIFACT_SCOPE && e.scope !== agentId)) return fail(`no memory ${id}`);
           return withInbox(`# ${e.title} (${e.id})\n\n${e.body}`);
         }
-        const list = query ? fm.memory.search(query, agentId) : fm.memory.visibleTo(agentId);
+        const list = query ? fm.memory.search(query, agentId, teamScope) : fm.memory.visibleTo(agentId, teamScope);
         if (!list.length) return withInbox('No memory notes.');
         if (query && list.length <= 3) return withInbox(list.map((e) => `# ${e.title} (${e.id})\n\n${truncate(e.body, 3000)}`).join('\n\n---\n\n'));
         return withInbox(list.map((e) => `- ${e.id}: ${e.title}`).join('\n'));
@@ -259,7 +268,7 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
           goal_id: z.string().optional(),
         },
         async ({ title, summary, open_items, done, notes, id, goal_id }) => {
-          const goal = goal_id ? fm.goal(goal_id) : fm.currentGoal();
+          const goal = goal_id ? fm.goal(goal_id) : fm.currentGoalFor(fm.teamOf(agentId).id);
           const body = renderArtifact({ title, summary, openItems: open_items, done: done ?? [], ...(notes ? { notes } : {}), ...(goal ? { goal } : {}) });
           const slug = id ? id.replace(`${ARTIFACT_SCOPE}/`, '') : undefined;
           const e = fm.memory.write({ scope: ARTIFACT_SCOPE, title, body, author: agentId, ...(slug ? { slug } : {}) });
@@ -280,13 +289,16 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
           start_branch: z.string().optional().describe('only for a fetched pull request: its branch, e.g. "agentcraft/pr-12"; the worker starts from the contributor\'s commits'),
         },
         async ({ title, description, deps, assignee, priority, start_branch }) => {
-          const goal = fm.currentGoal();
+          const team = fm.teamOf(agentId);
+          const goal = fm.currentGoalFor(team.id);
           if (start_branch && !isPrBranch(start_branch)) return fail(`start_branch must be a fetched pull request branch (agentcraft/pr-<n>), not ${start_branch}`);
           let who: string | undefined;
           if (assignee) {
             who = fm.resolveAgentId(assignee);
             if (!who) return fail(`no worker ${assignee}`);
-            if (fm.agent(who)?.role === 'lead') return fail('assign tasks to workers, not yourself');
+            if (fm.teams.isLead(who)) return fail('assign tasks to workers, not to a lead');
+            // another team's worker is not short of work, and their repos are not yours
+            if (!team.members.includes(who)) return fail(`${fm.nameOf(who)} is on ${fm.teamOf(who).name}, not ${team.name}; assign this to one of ${team.members.join(', ') || 'your own workers'}`);
           }
           try {
             const t = fm.tasks.create({
@@ -299,8 +311,9 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
               createdBy: agentId,
               ...(goal ? { goalId: goal.id } : {}),
               ...(goal?.repoId ? { repoId: goal.repoId } : {}),
+              teamId: team.id,
             });
-            fm.bus.feed('task', `Marlow created ${t.id}: ${t.title}`, { agentId });
+            fm.bus.feed('task', `${fm.nameOf(agentId)} created ${t.id}: ${t.title}`, { agentId });
             hooks.onTasksChanged();
             return withInbox(`Created ${t.id}.`);
           } catch (e) {
