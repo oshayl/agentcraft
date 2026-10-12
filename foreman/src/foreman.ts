@@ -30,7 +30,7 @@ import type {
   Task, PermissionMode,} from './protocol.js';
 import { MERGE_WITH_ASIDE_OPTION, MERGE_WITH_LAND_OPTION } from './protocol.js';
 import { formatUncommittedReview, RepoError, RepoManager } from './repos.js';
-import { dev, devBegin, devInFlight } from './selfhost.js';
+import { dev, devBegin, devInFlight, RELOAD_EXIT_CODE } from './selfhost.js';
 import { Store } from './store.js';
 import { TaskError, TaskGraph } from './taskgraph.js';
 import { setUserName, userName } from './user.js';
@@ -705,7 +705,7 @@ export class Foreman {
         if (r.restarting) {
           // the answer has to reach the client before the process goes
           this.store.flush();
-          setTimeout(() => process.exit(0), 400).unref?.();
+          setTimeout(() => process.exit(RELOAD_EXIT_CODE), 400).unref?.();
         }
         return { lines: r.lines };
       }

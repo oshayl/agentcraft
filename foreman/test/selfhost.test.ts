@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { DevActionMsg, type ClientMessage } from '../src/protocol.js';
 import type { Outbound } from '../src/protocol.js';
-import { DEV_ACTIONS, dev, devInFlight } from '../src/selfhost.js';
+import { DEV_ACTIONS, dev, devInFlight, RELOAD_EXIT_CODE } from '../src/selfhost.js';
 import { makeForeman, rmrf, tempDir, until } from './helpers.js';
 
 const cleanup: string[] = [];
@@ -83,6 +83,12 @@ describe('the in-game dev loop', () => {
     // it is written out by hand, so this is what notices when the two lists drift apart.
     const wire = DevActionMsg.shape.action.options;
     expect([...wire].sort()).toEqual([...DEV_ACTIONS].sort());
+  });
+
+  it('leaves with a code its service manager restarts on', () => {
+    // A clean zero is how a process says it meant to stop, and this machine's launchd job only
+    // restarts the Foreman when it exits badly. Reloading with 0 left nothing on the port.
+    expect(RELOAD_EXIT_CODE).not.toBe(0);
   });
 
   it('rejects a step it does not have', () => {

@@ -24,6 +24,16 @@ export interface DevResult {
   restarting?: boolean;
 }
 
+/**
+ * The exit code a reload leaves with.
+ *
+ * Not zero, on purpose. This machine's launchd job is `KeepAlive: {SuccessfulExit: false}`, which
+ * restarts the Foreman only when it exits badly - a clean zero reads as "it meant to stop", and
+ * the reload left nothing listening on the port until someone went to a terminal. 75 is
+ * EX_TEMPFAIL: come back and try again.
+ */
+export const RELOAD_EXIT_CODE = 75;
+
 const CHECK_MS = 10 * 60_000;
 
 // The one slow step running right now, if any. Two reasons to know: a reload exits the process a
