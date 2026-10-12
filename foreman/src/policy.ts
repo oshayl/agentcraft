@@ -32,6 +32,8 @@
 //   Bash:exact:<hash>                 only this exact command text: used whenever arguments cannot
 //                                     be checked (xargs, variables, substitutions, unknown
 //                                     programs, process/system commands, inline code)
+//   Bash:inline-write                 a worker's inline scripts that change files it names inside
+//                                     its own worktree, and start no process and open no socket
 //   Read:<dir>, Grep:tree:<p>, Write:<dir>, WebFetch:<host>, ...  for the non-Bash tools
 //
 // Pure apart from realpath lookups (links that lead out of the worktree), so it can be table-tested.
@@ -116,6 +118,7 @@ export function exactKey(command: string): string {
 export function describeRuleKey(key: string): string {
   let m: RegExpExecArray | null;
   if (key.startsWith('Bash:exact:')) return 'only this exact command';
+  if (key === INLINE_WRITE_KEY) return 'inline scripts that change files inside this worktree';
   if ((m = /^Bash:outside:(.+?):(r|w|x)(tree)?:(.*)$/.exec(key))) {
     const verb = m[2] === 'r' ? 'reading' : m[2] === 'w' ? 'writing' : 'running';
     return m[3] ? `${m[1]} ${m[2] === 'r' ? 'reading' : 'changing'} everything under ${m[4]}` : `${m[1]} ${verb} files in ${m[4]}`;
@@ -934,13 +937,49 @@ const VAR_SETTERS = new Set(['export', 'declare', 'typeset', 'local', 'readonly'
 const RISKY_CODE =
   /child_process|\bspawn(Sync)?\b|\bexec(Sync|File|FileSync)?\s*\(|\bfork\s*\(|process\.(env|kill|chdir|binding)|\bfetch\s*\(|https?:\/\/|\brequire\s*\(\s*['"](node:)?(net|http|https|http2|dgram|tls|dns|worker_threads|cluster|vm|inspector)['"]|\bimport\s*\(|\b(unlink|rm|rmdir|rename|copyFile|cp|symlink|link|chmod|chown|truncate|writeFile|appendFile|mkdir|mkdtemp|createWriteStream|utimes|lchown)(Sync)?\s*\(|\bopen(Sync)?\s*\([^)]*['"][wax]|os\.homedir|\bsubprocess\b|\bos\.(system|popen|remove|unlink|rmdir|removedirs|rename|renames|replace|makedirs|mkdir|chdir|chmod|chown|exec\w*|spawn\w*|kill|startfile)|shutil\.|\bsocket\b|urllib|\brequests\b|\bhttp\.client|\bopen\s*\([^)]*['"][wax+]|Path\([^)]*\)\.(write|unlink|rmdir|rename|mkdir|touch)|Deno\.(run|Command|remove|writeTextFile|writeFile|mkdir|rename)|Bun\.(spawn|write|\$)|\beval\s*\(|\bFunction\s*\(|\bsystem\s*\(|\bIO\.popen|\bKernel\.|\bFile\.(write|delete|open)|\bunlink\b|\u0001/;
 
+/**
+ * The part of {@link RISKY_CODE} that leaves the worktree whatever its paths say: starting
+ * processes, reaching the network, or building code at runtime. Writing a file is not here.
+ */
+const ESCAPING_CODE =
+  /child_process|\bspawn(Sync)?\b|\bexec(Sync|File|FileSync)?\s*\(|\bfork\s*\(|process\.(env|kill|chdir|binding)|\bfetch\s*\(|https?:\/\/|\brequire\s*\(\s*['"](node:)?(net|http|https|http2|dgram|tls|dns|worker_threads|cluster|vm|inspector)['"]|\bimport\s*\(|os\.homedir|\bsubprocess\b|\bos\.(system|popen|chdir|exec\w*|spawn\w*|kill|startfile)|\bsocket\b|urllib|\brequests\b|\bhttp\.client|Deno\.(run|Command)|Bun\.(spawn|\$)|\beval\s*\(|\bFunction\s*\(|\bsystem\s*\(|\bIO\.popen|\bKernel\.|sys\.argv|process\.argv|os\.environ|\binput\s*\(|\bARGV\b/;
+
+/**
+ * One key for "this agent may run inline code that changes files inside its own worktree".
+ *
+ * Every heredoc is different text, so an exact-command grant can never match a second time:
+ * 311 prompts were answered "Always allow for this agent" and banked 236 keys that could not
+ * fire again, while the agents stood waiting 11 hours in total. The work itself was always the
+ * same shape - a python or node snippet editing files in the worktree - so it gets a key of
+ * that shape instead.
+ *
+ * Deliberately narrow. It is offered only when the snippet starts no process, opens no socket
+ * and builds no code at runtime, and only when every path it actually names resolves inside the
+ * worktree. Anything else still hashes exactly. For a Codex worker the OS sandbox enforces the
+ * boundary as well; for a Claude worker, which has no sandbox, this check is the boundary, so it
+ * refuses rather than guesses whenever it cannot see where the code writes.
+ */
+const INLINE_WRITE_KEY = 'Bash:inline-write';
+
 function inlineCodeVerdict(cmd: string, code: string, sc: SegCtx): J {
   if (scanForPush(code)) return refuse(PUSH_DENY);
-  if (RISKY_CODE.test(code)) return exact(sc.env, `${cmd} runs inline code that can write files, start processes or use the network`);
   const paths = embeddedPaths(code).filter((p) => {
     const r = resolveToken(p, sc.vcwd, sc.env.ctx, sc.vals);
     return r.kind !== 'path' || !inArea(sc.env.ctx, r.abs, 'r');
   });
+  if (RISKY_CODE.test(code)) {
+    // `paths` is already every absolute path the snippet names that falls outside the worktree,
+    // and EMBEDDED_PATH_RE finds only absolute ones: a snippet that names none can reach nothing
+    // but its own cwd, which is the worktree. Writing a worktree file with sed -i needs no prompt
+    // either, so this grants through a heredoc exactly what is already allowed through a tool the
+    // policy can read.
+    // `..` climbs out with a relative path, which EMBEDDED_PATH_RE never sees because it looks
+    // for absolute ones. Without this, open('../../../elsewhere/secret','w') read as confined.
+    const climbs = /\.\.[\\/]/.test(code);
+    const confined = !ESCAPING_CODE.test(code) && !climbs && !paths.length && sc.env.ctx.role === 'worker';
+    if (confined) return need(`${cmd} runs inline code that changes files in the worktree`, INLINE_WRITE_KEY);
+    return exact(sc.env, `${cmd} runs inline code that can write files, start processes or use the network`);
+  }
   if (paths.length) return exact(sc.env, `${cmd} inline code uses a path outside the worktree: ${paths[0]}`);
   return ok(`${cmd} inline code (read-only)`, false);
 }
