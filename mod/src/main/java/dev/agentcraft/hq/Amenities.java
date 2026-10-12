@@ -45,7 +45,10 @@ final class Amenities {
 				for (int h = y; h < top; h++) {
 					p.set(x, h, z, wall ? (Math.abs(dx) == r && Math.abs(dz) == r ? WHITE : GLASS) : Blocks.AIR.defaultBlockState());
 				}
-				p.set(x, top, z, WHITE);
+				// light in the lobby ceiling. It had one lantern on its table, so the room you
+				// arrive in measured zero block light over most of its floor at night.
+				boolean lit = !wall && Math.abs(dx) % 3 == 1 && Math.abs(dz) % 3 == 1;
+				p.set(x, top, z, lit ? dev.agentcraft.block.ModBlocks.GLOW_PANEL.defaultBlockState() : WHITE);
 			}
 		}
 		// seating: two benches facing each other over a table, east of the tower

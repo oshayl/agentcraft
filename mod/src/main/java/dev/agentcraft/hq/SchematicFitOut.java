@@ -74,7 +74,11 @@ final class SchematicFitOut {
 			if (keepsStairs(p, x, floorY, z)) {
 				continue;
 			}
-			for (int y = floorY; y < floorY + HEIGHT; y++) {
+			// up to this column's own ceiling, not a fixed four: these storeys are five and
+			// eight blocks tall, so clearing four left the tops of the partitions floating
+			int ceil = ceilingAbove(p, x, floorY, z);
+			int top = ceil < 0 ? floorY + HEIGHT : ceil;
+			for (int y = floorY; y < top; y++) {
 				p.set(x, y, z, Blocks.AIR.defaultBlockState());
 			}
 		}
@@ -102,6 +106,23 @@ final class SchematicFitOut {
 			add(ring, p, inside, x0, floorY, z, Direction.WEST);
 		}
 		return ring;
+	}
+
+	/**
+	 * The first solid block above the floor on this column, or -1 when the sky is up there.
+	 *
+	 * <p>Worth measuring rather than assuming. The light grid used to go in at a fixed four
+	 * blocks up and only when something solid sat directly on it, and on this house that is true
+	 * on no storey at all - the middle one is five blocks to its ceiling and the top one is
+	 * eight - so both opened floors came out with not one light in them.
+	 */
+	private static int ceilingAbove(Plan p, int x, int floorY, int z) {
+		for (int y = floorY + 3; y <= floorY + 10; y++) {
+			if (!p.isAir(x, y, z)) {
+				return y;
+			}
+		}
+		return -1;
 	}
 
 	/** Stairs or a ladder on this column: the way between floors stays open. */
@@ -236,7 +257,6 @@ final class SchematicFitOut {
 			z1 = Math.max(z1, s.z());
 		}
 		int spineZ = Math.max(z0 + 1, Math.min(z1 - 1, doorZ));
-		int ceiling = floorY + HEIGHT - 1;
 		for (int x = x0; x <= x1; x++) {
 			for (int z = z0; z <= z1; z++) {
 				if (p.isAir(x, floorY - 1, z)) {
@@ -252,8 +272,11 @@ final class SchematicFitOut {
 					p.set(x, floorY - 1, z, ModBlocks.WALNUT_TRIM.defaultBlockState());
 				}
 				boolean lit = (x - x0) % 4 == 2 && (z - z0) % 4 == 2;
-				if ((lit || (spine && z == spineZ && (x - x0) % 5 == 2)) && !p.isAir(x, ceiling + 1, z)) {
-					p.set(x, ceiling, z, ModBlocks.GLOW_PANEL.defaultBlockState());
+				if (lit || (spine && z == spineZ && (x - x0) % 5 == 2)) {
+					int ceil = ceilingAbove(p, x, floorY, z);
+					if (ceil > floorY + 2) {
+						p.set(x, ceil - 1, z, ModBlocks.GLOW_PANEL.defaultBlockState());
+					}
 				}
 			}
 		}

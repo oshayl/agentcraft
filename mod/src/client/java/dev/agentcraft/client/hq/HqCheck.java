@@ -157,7 +157,13 @@ final class HqCheck {
 					continue;
 				}
 				double len = 0;
-				double floorY = Math.min(start.y, goal.y);
+				// Climbing means walking over the furniture, not gaining height: now that the HQ
+				// is four storeys joined by a stair, every route between floors rises, and
+				// measuring against the lower end called all twenty of them a climb. A route may
+				// go as high as the higher of its two ends; above that it is standing on
+				// something. (A route that climbs onto a desk on the lower floor and comes back
+				// down is still missed - that wants the block under each point, not its height.)
+				double floorY = Math.max(start.y, goal.y);
 				for (int i = 0; i < route.size(); i++) {
 					if (i > 0) {
 						len += route.get(i).distanceTo(route.get(i - 1));
