@@ -51,54 +51,45 @@ final class Amenities {
 				p.set(x, top, z, lit ? dev.agentcraft.block.ModBlocks.GLOW_PANEL.defaultBlockState() : WHITE);
 			}
 		}
-		// Reception, laid out from the radius rather than from numbers that happened to fit.
-		// The seating used to start four blocks off the tower and run three wide, which put its
-		// far side exactly on the wall ring: a chair replaced the glass, and the anchor for
-		// whoever sat in it was inside the wall.
-		int inner = r - 1; // the last column that is floor rather than wall
-		int sx = cx + towerRadius + 2;
-		if (sx + 1 <= inner) {
-			for (int dz = -2; dz <= 2; dz++) {
-				for (int dx = -1; dx <= 1; dx++) {
-					p.set(sx + dx, y, cz + dz, St.carpet(Math.abs(dz) == 2 ? DyeColor.BROWN : DyeColor.LIGHT_GRAY));
-				}
-			}
-			p.set(sx, y, cz, St.slab(Blocks.DARK_OAK_SLAB, true));
-			p.set(sx, y + 1, cz, St.lantern(Blocks.LANTERN, false));
-			// benches down the long sides, facing each other across the table
-			for (int dx = -1; dx <= 1; dx += 2) {
-				seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, dx < 0 ? 3 : 4), sx + dx, y, cz - 2, Direction.SOUTH);
-				seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, dx < 0 ? 5 : 6), sx + dx, y, cz + 2, Direction.NORTH);
-			}
-			p.set(sx + 1, y, cz - 1, St.of(Blocks.POTTED_FERN));
-			p.set(sx + 1, y, cz + 1, St.of(Blocks.POTTED_FLOWERING_AZALEA));
+		// The lobby is a ring two blocks deep around the tower, not a room with a tower in it:
+		// the tower is seven across and the lobby thirteen, so there are two columns of floor on
+		// each side and nothing wider than that fits. It used to be furnished as though it were
+		// a room - a three-wide seating group starting four blocks off the tower - which put its
+		// far side exactly on the wall: a chair replaced the glass and the anchor for whoever
+		// sat in it was inside the wall. So it is laid out as what it is, a corridor you arrive
+		// in, with everything against the glass and the walking line left clear.
+		int inX0 = cx - r + 1;
+		int inX1 = cx + r - 1;
+		int inZ1 = cz + r - 1;
+		// benches either side of the door, backs to the glass, looking in at the stair
+		int n = 3;
+		for (int dx : new int[] {-3, -2, 2, 3}) {
+			seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, n++), cx + dx, y, inZ1, Direction.NORTH);
 		}
-		// a desk facing whoever comes in, on the far side of the tower from the door
-		int dx0 = cx - towerRadius - 2;
-		if (dx0 - 1 >= cx - inner) {
-			for (int dz = -1; dz <= 1; dz++) {
-				p.set(dx0, y, cz + dz, St.slab(Blocks.DARK_OAK_SLAB, true));
-				p.set(dx0, y + 1, cz + dz, dz == 0 ? dev.agentcraft.block.ModBlocks.MONITOR.defaultBlockState()
-					.setValue(dev.agentcraft.block.FacingEntityBlock.FACING, Direction.EAST) : WHITE);
-			}
-			p.set(dx0 - 1, y, cz, St.stairs(Blocks.DARK_OAK_STAIRS, Direction.WEST, false));
+		for (int dx : new int[] {-1, 1}) {
+			p.set(cx + dx, y, inZ1, St.of(dx < 0 ? Blocks.POTTED_FERN : Blocks.POTTED_FLOWERING_AZALEA));
 		}
-		// something green in the corners the walkway does not use
-		for (int sgnX = -1; sgnX <= 1; sgnX += 2) {
-			for (int sgnZ = -1; sgnZ <= 1; sgnZ += 2) {
-				int px = cx + sgnX * inner;
-				int pz = cz + sgnZ * inner;
-				if (p.isAir(px, y, pz) && !p.isAir(px, y - 1, pz)) {
-					p.set(px, y, pz, St.of((sgnX + sgnZ) == 0 ? Blocks.POTTED_AZALEA : Blocks.POTTED_FERN));
-				}
-			}
-		}
-		// the way in, and where someone waiting is told to stand
+		// a desk down the east side, facing the way you come in
 		for (int dz = -1; dz <= 1; dz++) {
-			for (int h = 0; h <= 2; h++) {
-				p.set(cx + dz, y + h, cz + r, Blocks.AIR.defaultBlockState());
+			p.set(inX1, y, cz + dz, St.slab(Blocks.DARK_OAK_SLAB, true));
+			p.set(inX1, y + 1, cz + dz, dz == 0
+				? dev.agentcraft.block.ModBlocks.MONITOR.defaultBlockState().setValue(dev.agentcraft.block.FacingEntityBlock.FACING, Direction.WEST)
+				: St.lantern(Blocks.LANTERN, false));
+		}
+		// and something green in the corners, which is the only place nobody has to walk
+		for (int x : new int[] {inX0, inX1}) {
+			for (int z : new int[] {cz - r + 1, inZ1}) {
+				if (p.isAir(x, y, z) && !p.isAir(x, y - 1, z)) {
+					p.set(x, y, z, St.of(Blocks.POTTED_AZALEA));
+				}
 			}
-			p.set(cx + dz, ground, cz + r, FLOOR);
+		}
+		// the way in, three wide, and where someone waiting is told to stand
+		for (int dx = -1; dx <= 1; dx++) {
+			p.set(cx + dx, ground, cz + r, FLOOR);
+			for (int h = 0; h <= 2; h++) {
+				p.set(cx + dx, y + h, cz + r, Blocks.AIR.defaultBlockState());
+			}
 		}
 		a.put(AnchorNames.ENTRANCE, cx + 0.5, y, cz + r - 1.5, 180, 0);
 	}
