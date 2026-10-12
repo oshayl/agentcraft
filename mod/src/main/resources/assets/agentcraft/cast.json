@@ -187,14 +187,138 @@
           "panel shade / inactive tab"
         ]
       }
+    },
+    {
+      "id": "ash",
+      "name": "Ash",
+      "role": "worker",
+      "title": "Integrator",
+      "color": "#666B22",
+      "accent": "#E9E5DE",
+      "model": "default",
+      "skin": "agentcraft:textures/entity/agent/ash.png",
+      "portrait": "agentcraft:textures/gui/portrait/ash.png",
+      "description": "Wires the pieces together: the one who finds out that two finished things do not actually meet. Ginger crop, olive work shirt.",
+      "ramp": [
+        "#94994C",
+        "#7D8235",
+        "#666B22",
+        "#4D5215",
+        "#35380C"
+      ],
+      "text_on_dark": "#A8AB81",
+      "text_on_light": "#606422",
+      "contrast": {
+        "text_on_dark_min": [
+          4.6,
+          "nameplate over a bright wall"
+        ],
+        "text_on_light_min": [
+          4.53,
+          "panel shade / inactive tab"
+        ]
+      }
+    },
+    {
+      "id": "fen",
+      "name": "Fen",
+      "role": "worker",
+      "title": "Data & migrations",
+      "color": "#22616B",
+      "accent": "#E9E5DE",
+      "model": "slim",
+      "skin": "agentcraft:textures/entity/agent/fen.png",
+      "portrait": "agentcraft:textures/gui/portrait/fen.png",
+      "description": "Schemas, migrations and the awkward questions about what happens to the rows already there. Deep teal.",
+      "ramp": [
+        "#4C8E99",
+        "#357782",
+        "#22616B",
+        "#154952",
+        "#0C3238"
+      ],
+      "text_on_dark": "#8CADB2",
+      "text_on_light": "#22616B",
+      "contrast": {
+        "text_on_dark_min": [
+          4.56,
+          "nameplate over a bright wall"
+        ],
+        "text_on_light_min": [
+          5.07,
+          "panel shade / inactive tab"
+        ]
+      }
+    },
+    {
+      "id": "opal",
+      "name": "Opal",
+      "role": "worker",
+      "title": "Accessibility & copy",
+      "color": "#E649A7",
+      "accent": "#E9E5DE",
+      "model": "slim",
+      "skin": "agentcraft:textures/entity/agent/opal.png",
+      "portrait": "agentcraft:textures/gui/portrait/opal.png",
+      "description": "Reads every string out loud and tabs through every form. Magenta, flax hair, no patience for a div that should be a button.",
+      "ramp": [
+        "#FF7FCC",
+        "#FD67C1",
+        "#E649A7",
+        "#CC3590",
+        "#B3277B"
+      ],
+      "text_on_dark": "#EE83C3",
+      "text_on_light": "#A03A77",
+      "contrast": {
+        "text_on_dark_min": [
+          4.53,
+          "nameplate over a bright wall"
+        ],
+        "text_on_light_min": [
+          4.5,
+          "panel shade / inactive tab"
+        ]
+      }
+    },
+    {
+      "id": "bryn",
+      "name": "Bryn",
+      "role": "worker",
+      "title": "Infrastructure & CI",
+      "color": "#226B47",
+      "accent": "#E9E5DE",
+      "model": "default",
+      "skin": "agentcraft:textures/entity/agent/bryn.png",
+      "portrait": "agentcraft:textures/gui/portrait/bryn.png",
+      "description": "Pipelines, caches and the build that only fails on a Tuesday. Deep green.",
+      "ramp": [
+        "#4C9973",
+        "#35825C",
+        "#226B47",
+        "#155234",
+        "#0C3822"
+      ],
+      "text_on_dark": "#88AF9C",
+      "text_on_light": "#226B47",
+      "contrast": {
+        "text_on_dark_min": [
+          4.52,
+          "nameplate over a bright wall"
+        ],
+        "text_on_light_min": [
+          4.65,
+          "panel shade / inactive tab"
+        ]
+      }
     }
   ],
   "checks": {
-    "min_de_vs_status": 25.2,
+    "min_de_vs_status": 25.0,
     "min_de_between_agents": 18.2,
     "min_de_accent_vs_status": 21.3,
-    "min_contrast_text_on_dark": 4.54,
-    "min_contrast_text_on_light": 4.51,
+    "min_contrast_text_on_dark": 4.52,
+    "min_contrast_text_on_light": 4.5,
     "dark_surfaces": {
       "nameplate over a bright wall": "#3E3C3B",
       "ink (HUD, console)": "#1F1E1D",

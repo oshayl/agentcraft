@@ -63,7 +63,10 @@ describe('WebSocket server + sim backend', () => {
     a.send({ type: 'hello', modVersion: 'test', protocol: 1, client: 'test' });
     await until(() => a.msgs.some((m) => m.type === 'snapshot'));
     const snap = a.msgs.find((m) => m.type === 'snapshot')!;
-    expect(snap.type === 'snapshot' && snap.agents.map((x) => x.id).sort()).toEqual(['juniper', 'kit', 'marlow', 'rowan', 'tove', 'wren']);
+    // the whole cast, whoever is in it: the snapshot carries every agent, on shift or not
+    const ids = snap.type === 'snapshot' ? snap.agents.map((x) => x.id) : [];
+    expect(ids).toEqual(expect.arrayContaining(['marlow', 'juniper', 'kit', 'wren', 'rowan', 'tove']));
+    expect(new Set(ids).size).toBe(ids.length);
 
     // invalid message -> error, with ack when it had an id
     a.ws.send(JSON.stringify({ v: 1, id: 'bad1', type: 'goal.submit' }));

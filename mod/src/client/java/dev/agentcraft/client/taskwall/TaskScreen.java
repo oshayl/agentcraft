@@ -41,6 +41,9 @@ public class TaskScreen extends Screen {
 	private String taskId;
 	private @Nullable String feedback;
 	private boolean feedbackError;
+	/** A retry we sent and are still watching, and the blocked reason it was sent against. */
+	private @Nullable String retriedId;
+	private @Nullable String retriedFrom;
 	private boolean confirmCancel;
 	/** The cancel confirmation lapses after this (System.nanoTime), so a stray click later never cancels. */
 	private long confirmUntil;
@@ -133,6 +136,7 @@ public class TaskScreen extends Screen {
 		}
 		taskId = all.get(Math.floorMod(i + dir, all.size())).id();
 		feedback = null;
+		retriedId = null;
 		confirmCancel = false;
 		reassignOpen = false;
 	}
@@ -416,6 +420,18 @@ public class TaskScreen extends Screen {
 		if (confirmCancel) {
 			return "Cancel " + t.id() + "? Press Confirm (it stops the work on it)";
 		}
+		// A retry that is immediately blocked again looks exactly like a button that does
+		// nothing: you press it, the card still says Blocked, and the only thing that changed
+		// is a reason you have no way of telling is new. Say so.
+		if (t.id().equals(retriedId) && t.status() == TaskStatus.BLOCKED) {
+			String why = t.blockedReason() == null ? "" : t.blockedReason();
+			if (!why.equals(retriedFrom)) {
+				retriedFrom = why;
+				feedback = null;
+			}
+			feedbackError = true;
+			return "Retried, and " + (t.assignee() == null ? "it" : nameOf(t.assignee())) + " blocked it again - the reason below is the new one";
+		}
 		if (feedback != null) {
 			return feedback;
 		}
@@ -555,6 +571,8 @@ public class TaskScreen extends Screen {
 			}
 			case "retry" -> {
 				confirmCancel = false;
+				retriedId = taskId;
+				retriedFrom = currentBlockedReason();
 				send("retry", null);
 			}
 			case "prioritize" -> {
@@ -591,6 +609,12 @@ public class TaskScreen extends Screen {
 				feedbackError = false;
 			}
 		});
+	}
+
+	private @Nullable String currentBlockedReason() {
+		ForemanState s = Foreman.state();
+		Task t = s == null || taskId == null ? null : s.task(taskId);
+		return t == null ? null : t.blockedReason();
 	}
 
 	private static String nameOf(String agentId) {

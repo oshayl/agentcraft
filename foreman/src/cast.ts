@@ -15,7 +15,7 @@ export interface CastMember {
 }
 
 export const LEAD_ID = 'marlow';
-export const WORKER_IDS = ['juniper', 'kit', 'wren', 'rowan', 'tove'] as const;
+export const WORKER_IDS = ['juniper', 'kit', 'wren', 'rowan', 'tove', 'ash', 'fen', 'opal', 'bryn'] as const;
 
 const PLACEHOLDER: CastMember[] = [
   { id: 'marlow', name: 'Marlow', role: 'lead', title: 'Lead', color: '#D97757', accent: '#3B2A20', description: 'Plans the work, splits it into tasks, reviews and asks you when it matters.' },
@@ -24,6 +24,10 @@ const PLACEHOLDER: CastMember[] = [
   { id: 'wren', name: 'Wren', role: 'worker', title: 'Worker', color: '#C9A227', accent: '#3B2A20', description: 'Front-of-house polish: output, colors, docs.' },
   { id: 'rowan', name: 'Rowan', role: 'worker', title: 'Worker', color: '#B4553A', accent: '#E9E1D3', description: 'Documentation and release hygiene.' },
   { id: 'tove', name: 'Tove', role: 'worker', title: 'Worker', color: '#6F8FB5', accent: '#F4EFE6', description: 'Performance and tooling.' },
+  { id: 'ash', name: 'Ash', role: 'worker', title: 'Integrator', color: '#666B22', accent: '#E9E5DE', description: 'Wires the pieces together; finds out that two finished things do not meet.' },
+  { id: 'fen', name: 'Fen', role: 'worker', title: 'Data & migrations', color: '#22616B', accent: '#E9E5DE', description: 'Schemas and migrations, and what happens to the rows already there.' },
+  { id: 'opal', name: 'Opal', role: 'worker', title: 'Accessibility & copy', color: '#E649A7', accent: '#E9E5DE', description: 'Reads every string out loud and tabs through every form.' },
+  { id: 'bryn', name: 'Bryn', role: 'worker', title: 'Infrastructure & CI', color: '#226B47', accent: '#E9E5DE', description: 'Pipelines, caches, and the build that only fails on a Tuesday.' },
 ];
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;

@@ -46,6 +46,8 @@ public final class SchematicHqBuilder implements HqBuilder {
 	/** The band the parkour runs in, and the glade the trees leave for it. */
 	private static final int COURSE_INNER = 21;
 	private static final int COURSE_OUTER = 28;
+	/** Desk bays the work floor's wall can take: twenty-four blocks of it, four per bay. */
+	private static final int PENTHOUSE_DESKS = 6;
 	/** A ceiling this close above means a cell is indoors rather than on a roof. */
 	private static final int CEILING = 8;
 
@@ -136,11 +138,18 @@ public final class SchematicHqBuilder implements HqBuilder {
 			int[] storeys = lit.floors(groundY);
 			// a different half of the cast watching from each floor, so no two floors of screens
 			// say the same thing
+			// The work floor's desk row is twenty-four blocks of wall and each bay is four of
+			// them, so it seats six and no more - past that they pile up on the end wall. The
+			// rest of the cast gets a desk on the storeys below, which is the point of opening
+			// them: a floor each, not a queue for one wall.
 			List<String> cast = new ArrayList<>(Cast.ids());
+			int upstairs = Math.min(PENTHOUSE_DESKS, cast.size());
+			List<String> downstairs = new ArrayList<>(cast.subList(upstairs, cast.size()));
+			int perFloor = (int) Math.ceil(downstairs.size() / (double) Math.max(1, storeys.length - 1));
 			for (int i = 1; i < storeys.length; i++) {
-				List<String> watching = new ArrayList<>(cast.subList(0, cast.size()));
-				java.util.Collections.rotate(watching, -((i - 1) * Math.max(1, cast.size() / 2)));
-				if (SchematicFitOut.openFloor(p, y0 + storeys[i], doorZ, SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3], watching) > 0) {
+				int from = Math.min(downstairs.size(), (i - 1) * perFloor);
+				List<String> seats = new ArrayList<>(downstairs.subList(from, Math.min(downstairs.size(), from + perFloor)));
+				if (SchematicFitOut.openFloor(p, a, y0 + storeys[i], doorZ, SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3], seats) > 0) {
 					opened++;
 				}
 			}
@@ -152,7 +161,7 @@ public final class SchematicHqBuilder implements HqBuilder {
 		int bottomY = GROUND;
 		if (b != null) {
 			room = Penthouse.build(p, y0 + b[4], SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3]);
-			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()), (SITE_Z + b[1] + SITE_Z + b[3]) / 2);
+			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()).subList(0, Math.min(PENTHOUSE_DESKS, Cast.ids().size())), (SITE_Z + b[1] + SITE_Z + b[3]) / 2);
 			Penthouse.beacon(p, room, room.y() + Penthouse.HEIGHT);
 			// Clear of the penthouse, not flush with it: a tower on the work floor's own footprint
 			// carved its shaft out of the east side of that floor and took a merge station with

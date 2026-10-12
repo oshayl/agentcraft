@@ -21,6 +21,9 @@ async function hold(home: string, repo: string, variant: string[]) {
 
 const states = (agents: Agent[]) => Object.fromEntries(agents.map((a) => [a.id, `${a.state}@${a.station}`]));
 
+/** The cast the showcase scenario poses. */
+const POSED = ['marlow', 'juniper', 'kit', 'wren', 'rowan', 'tove'];
+
 describe('sim showcase states', () => {
   it('--showcase holds the busy mid-run state with open decisions', async () => {
     const home = tempDir();
@@ -28,7 +31,9 @@ describe('sim showcase states', () => {
     cleanup.push(home, path.dirname(repo));
     let { h } = await hold(home, repo, []);
     expect(h.fm.status.showcase).toBe(true);
-    const s = states(h.fm.agents());
+    // the scenario poses the six it was written for; anyone added to the cast since is off
+    // shift and not what this test is about
+    const s = states(h.fm.agents().filter((a) => POSED.includes(a.id)));
     expect(s).toEqual({
       marlow: 'waiting_user@user',
       juniper: 'editing@desk',
@@ -43,7 +48,7 @@ describe('sim showcase states', () => {
     await h.fm.close();
     // a restart holds the same state immediately
     ({ h } = await hold(home, repo, []));
-    expect(states(h.fm.agents())).toEqual(s);
+    expect(states(h.fm.agents().filter((a) => POSED.includes(a.id)))).toEqual(s);
     await h.fm.close();
   }, 120_000);
 
@@ -53,7 +58,7 @@ describe('sim showcase states', () => {
     cleanup.push(home, path.dirname(repo));
     const { h } = await hold(home, repo, ['late']);
     expect(h.fm.status.showcase).toBe(true);
-    expect(states(h.fm.agents())).toEqual({
+    expect(states(h.fm.agents().filter((a) => POSED.includes(a.id)))).toEqual({
       marlow: 'thinking@meeting',
       juniper: 'running@terminal',
       kit: 'done@lounge',

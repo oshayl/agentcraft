@@ -241,7 +241,7 @@ final class SchematicFitOut {
 	 * @param doorZ where the stair arrives on the east side; the spine runs west from there
 	 * @return the walkable depth of the spine, or 0 when this storey has no room to open
 	 */
-	static int openFloor(Plan p, int floorY, int doorZ, int minX, int minZ, int maxX, int maxZ, List<String> watching) {
+	static int openFloor(Plan p, Anchors.Builder a, int floorY, int doorZ, int minX, int minZ, int maxX, int maxZ, List<String> seats) {
 		List<Spot> ring = open(p, floorY, minX, minZ, maxX, maxZ);
 		if (ring.isEmpty()) {
 			return 0;
@@ -280,7 +280,7 @@ final class SchematicFitOut {
 				}
 			}
 		}
-		benches(p, floorY, x0, z0, x1, z1, spineZ, watching);
+		benches(p, a, floorY, x0, z0, x1, z1, spineZ, seats);
 		racks(p, floorY, x0, z0, x1, z1, spineZ);
 		return x1 - x0 + 1;
 	}
@@ -291,7 +291,7 @@ final class SchematicFitOut {
 	 * rather than the wall: there is glass behind these, and a monitor hung on glass is a
 	 * monitor floating over the garden.
 	 */
-	private static void benches(Plan p, int y, int x0, int z0, int x1, int z1, int spineZ, List<String> watching) {
+	private static void benches(Plan p, Anchors.Builder a, int y, int x0, int z0, int x1, int z1, int spineZ, List<String> seats) {
 		int next = 0;
 		for (int side = 0; side < 2; side++) {
 			int zd = side == 0 ? z0 : z1;
@@ -306,16 +306,23 @@ final class SchematicFitOut {
 				if (p.isAir(x, y - 1, zd)) {
 					continue;
 				}
+				int zs = zd - look.getStepZ();
 				p.set(x, y, zd, St.slab(Blocks.DARK_OAK_SLAB, true));
 				p.set(x, y + 1, zd, ModBlocks.MONITOR.defaultBlockState().setValue(FacingEntityBlock.FACING, look.getOpposite()));
 				// One screen each, and the first of them the team board. An unbound monitor falls
 				// back to the activity feed, so a floor of them was six copies of the same feed -
 				// which reads as "every screen is showing Wren" on a day Wren is the one working.
-				p.bind(x, y + 1, zd, watching.isEmpty() ? "feed" : next == 0 ? "feed" : watching.get((next - 1) % watching.size()));
+				// the agents who work on this floor get a desk each, with their own screen on it
+				// and the anchor that sends them to it; the first bay is the team board
+				String who = next == 0 || seats.isEmpty() ? "feed" : next - 1 < seats.size() ? seats.get(next - 1) : "feed";
+				p.bind(x, y + 1, zd, who);
+				if (!who.equals("feed")) {
+					a.put(AnchorNames.desk(who), x + 0.5, y, zs + 0.5, look.toYRot(), 0);
+					a.put(AnchorNames.monitor(who), x + 0.5, y + 1.5, zd + 0.5 - look.getStepZ() * 0.25, look.getOpposite().toYRot(), 0);
+				}
 				next++;
 				// the seat is the cell in front, so an agent sits looking at the screen
-				int zs = zd - look.getStepZ();
-				if (p.isAir(zs == zd ? x : x, y, zs) && !p.isAir(x, y - 1, zs)) {
+				if (p.isAir(x, y, zs) && !p.isAir(x, y - 1, zs)) {
 					p.set(x, y, zs, St.stairs(Blocks.DARK_OAK_STAIRS, look.getOpposite(), false));
 				}
 			}
