@@ -87,6 +87,23 @@ function portOpen(port) {
   });
 }
 
+/**
+ * Wait for a port to stop answering.
+ *
+ * The recorded PID is the `gradlew runClient` wrapper, and Minecraft is the JVM it spawns, so
+ * the wrapper exits while the game is still shutting down and still holding its DevBridge port.
+ * A restart then launched the new game straight into "Address already in use", it came up with
+ * no bridge at all, and everything that drives the game from outside was silently blind.
+ */
+async function waitPortFree(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await portOpen(port))) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
 async function waitPort(port, timeoutMs, info, name) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -240,6 +257,12 @@ async function launch(opt, summary) {
     AGENTCRAFT_HOME: opt.home, AGENTCRAFT_PROFILE: opt.profile,
     AGENTCRAFT_MUTE: opt.dev ? '1' : '0', AGENTCRAFT_FOCUS: opt.dev ? '0' : '1',
   };
+  // belt and braces for the same race: a game started by something other than `stop` (a crash,
+  // a kill -9, another launcher) can still be holding the port when we get here
+  if (await portOpen(opt['dev-port'])) {
+    console.log(`waiting for :${opt['dev-port']} to come free before launching…`);
+    if (!(await waitPortFree(opt['dev-port'], 30000))) throw new Error(`:${opt['dev-port']} is still in use; the game would start with no DevBridge`);
+  }
   game = { ...start('/bin/sh', [path.join(root, 'mod', 'gradlew'), 'runClient', '--console=plain'], path.join(root, 'mod'), path.join(logDir, 'unix-game.log'), env), devPort: opt['dev-port'], foremanPort: fmPort };
   saveJson(gameFile, game);
   summary.game.started = true;
@@ -272,6 +295,9 @@ async function stop(opt) {
       if (owned(info)) try { process.kill(-info.pid, 'SIGKILL'); } catch {}
     }
     fs.rmSync(file, { force: true });
+    if (kind === 'game' && info.devPort && !(await waitPortFree(info.devPort, 30000))) {
+      console.warn(`game: something is still holding :${info.devPort} after 30s; the next launch will have no DevBridge`);
+    }
     console.log(`${kind}: stopped`);
   }
   if (opt['stop-daemon'] && kinds.includes('game')) {
