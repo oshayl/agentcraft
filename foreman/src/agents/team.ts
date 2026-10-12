@@ -271,6 +271,8 @@ export class TeamBackend implements Backend {
   private running = new Map<string, Running>();
   private pausedJobs = new Map<string, Job>();
   private tickTimer: NodeJS.Timeout | undefined;
+  /** the chokepoint last reported, so a standing block is said once rather than every tick */
+  private chokepoint = '';
   private scheduling = false;
   private scheduleAgain = false;
   private authFailed = false;
@@ -856,6 +858,59 @@ export class TeamBackend implements Backend {
     }
     // pump queues that were held back by the concurrency cap
     for (const id of this.queues.keys()) this.pump(id);
+    this.reportChokepoint();
+  }
+
+  /**
+   * Say so when the whole board is behind one task.
+   *
+   * A goal planned as a chain reaches a point where every task left waits, directly or through
+   * others, on a single unfinished one. From the outside that is nine idle agents and no
+   * explanation: "agents are waiting for one agent to do something" was how it was reported,
+   * after a release gate held five tasks for twenty hours. Adding workers cannot help - there is
+   * nothing for them to take - so the only useful thing the scheduler can do is name the task
+   * everything is waiting for, and whether it is itself waiting on the user.
+   *
+   * Said once per chokepoint, not once per tick: a standing block would otherwise fill the feed.
+   */
+  private reportChokepoint(): void {
+    const waiting = this.fm.tasks.list().filter((t) => t.status === 'todo');
+    // a free worker and nothing waiting is just an empty board
+    if (!waiting.length || this.workersRunning() >= this.cfg.maxConcurrent) {
+      this.chokepoint = '';
+      return;
+    }
+    const held = new Map<string, number>();
+    for (const t of waiting) {
+      const unmet = this.fm.tasks.unmetDeps(t);
+      // something could have started and did not: that is a different problem, and not this one
+      if (!unmet.length) {
+        this.chokepoint = '';
+        return;
+      }
+      for (const d of unmet) held.set(d, (held.get(d) ?? 0) + 1);
+    }
+    const [id, count] = [...held].sort((a, b) => b[1] - a[1])[0]!;
+    const blocker = this.fm.tasks.get(id);
+    if (!blocker || count < 2) {
+      this.chokepoint = '';
+      return;
+    }
+    const who = blocker.assignee ? this.fm.nameOf(blocker.assignee) : 'nobody';
+    const asked = blocker.assignee ? this.fm.decisions.open().find((d) => d.agentId === blocker.assignee) : undefined;
+    const why =
+      asked ? `, and ${who} is waiting for you to answer "${truncate(asked.question, 80)}"`
+      : blocker.status === 'todo' ? `, which has not started`
+      : blocker.status === 'blocked' ? `, which is blocked (${truncate(blocker.blockedReason ?? 'no reason given', 80)})`
+      : '';
+    const key = `${id}:${count}:${asked?.id ?? blocker.status}`;
+    if (this.chokepoint === key) return;
+    this.chokepoint = key;
+    this.fm.bus.feed(
+      'task',
+      `${count} task${count === 1 ? '' : 's'} are waiting on ${id} (${who})${why}. Nothing else can start until it lands.`,
+      { agentId: 'user' },
+    );
   }
 
   private async startWork(agentId: string, t: Task, goal: Goal): Promise<void> {
