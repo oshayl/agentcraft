@@ -29,6 +29,7 @@ export class DecisionQueue {
   /** answered, but side effects (e.g. the merge) not finished yet: waiters keep waiting */
   private unsettled = new Set<string>();
   private createdListeners: Array<(d: Decision) => void> = [];
+  private settledListeners: Array<(d: Decision) => void> = [];
 
   constructor(private ctx: Ctx) {}
 
@@ -50,6 +51,11 @@ export class DecisionQueue {
 
   onCreated(l: (d: Decision) => void): void {
     this.createdListeners.push(l);
+  }
+
+  /** Called once per decision when it stops being open, however it got there. */
+  onSettled(l: (d: Decision) => void): void {
+    this.settledListeners.push(l);
   }
 
   create(input: CreateDecisionInput): Decision {
@@ -137,14 +143,19 @@ export class DecisionQueue {
     return d;
   }
 
-  /** Wake everyone waiting on this decision. */
+  /** Wake everyone waiting on this decision, and say it is no longer open. */
   settle(id: string): void {
     this.unsettled.delete(id);
     const d = this.get(id);
+    if (!d) return;
     const ws = this.waiters.get(id);
-    if (!d || !ws) return;
-    this.waiters.delete(id);
-    for (const w of ws) w.resolve(d);
+    if (ws) {
+      this.waiters.delete(id);
+      for (const w of ws) w.resolve(d);
+    }
+    // Listeners run whether or not anyone was waiting: a cancelled prompt usually has no waiter
+    // left, and that is exactly the case that used to leave an agent standing at the user.
+    if (d.status !== 'open') for (const l of this.settledListeners) l(d);
   }
 
   /** Resolves once the decision is answered/cancelled and settled. */

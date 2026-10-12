@@ -75,8 +75,12 @@ export class CodexStreamMapper {
 
   private set(patch: { state?: any; station?: any; activity?: string }): void {
     const a = this.fm.agent(this.agentId);
-    // a pending question/permission keeps the agent at the user
-    if (a?.state === 'waiting_user' && patch.state !== 'waiting_user') return;
+    // A pending question/permission keeps the agent at the user - but only while one is really
+    // open. Without that second half this was a latch with no release: an agent that ended up at
+    // the user with nothing to answer could never be moved by anything the engine said again.
+    if (a?.state === 'waiting_user' && patch.state !== 'waiting_user') {
+      if (this.fm.decisions.open().some((d) => d.agentId === this.agentId)) return;
+    }
     this.fm.setAgent(this.agentId, patch);
   }
 

@@ -78,6 +78,34 @@ describe('DecisionQueue', () => {
     expect(woke).toBe(true);
   });
 
+  it('never leaves an agent standing at the user with nothing open', async () => {
+    // What happened to Wren: two permission prompts in a row, and after both were answered it
+    // stayed waiting_user with no open decision - so it wore the "!" and followed Noira around
+    // the HQ with nothing to approve.
+    const { fm } = setup();
+    fm.setAgent('wren', { state: 'waiting_user', station: 'user', activity: 'asking permission' });
+    const a = fm.createDecision({ agentId: 'wren', kind: 'permission', question: 'run psql?', options: ['Allow once', 'Deny'] });
+    const b = fm.createDecision({ agentId: 'wren', kind: 'permission', question: 'run pg_dump?', options: ['Allow once', 'Deny'] });
+
+    await fm.answerDecision(a.id, 'Allow once');
+    // one is still open, so the agent rightly stays at the user
+    expect(fm.agent('wren')?.state).toBe('waiting_user');
+
+    await fm.answerDecision(b.id, 'Allow once');
+    expect(fm.decisions.open().filter((d) => d.agentId === 'wren')).toEqual([]);
+    expect(fm.agent('wren')?.state).not.toBe('waiting_user');
+    expect(fm.agent('wren')?.station).not.toBe('user');
+  });
+
+  it('a cancelled prompt releases the agent too, with nobody waiting on it', async () => {
+    // cancel() settles without a waiter, which is the path that used to notice nothing
+    const { fm } = setup();
+    fm.setAgent('kit', { state: 'waiting_user', station: 'user', activity: 'asking permission' });
+    const d = fm.createDecision({ agentId: 'kit', kind: 'permission', question: 'run rm?', options: ['Allow once', 'Deny'] });
+    fm.decisions.cancel(d.id, 'turn stopped');
+    expect(fm.agent('kit')?.state).not.toBe('waiting_user');
+  });
+
   it('rate-limits and coalesces toasts', async () => {
     const { Notifier } = await import('../src/notifier.js');
     const shown: string[] = [];

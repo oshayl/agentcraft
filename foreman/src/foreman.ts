@@ -52,6 +52,8 @@ export interface Backend {
    */
   onMergeConflict?(task: Task, info: { base: string; branch: string; files: string[]; reason: string }): boolean;
   onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void;
+  /** Is a turn running for this agent right now? Used to decide what it goes back to. */
+  isBusy?(agentId: string): boolean;
   onAgentAction(agentId: string, action: 'pause' | 'resume' | 'stop' | 'spawn', arg?: string): Promise<void> | void;
   /** Every task of a goal is done: the lead's last turn on it (the artifact), if the backend wants one. */
   onGoalComplete?(goal: Goal): void;
@@ -121,6 +123,7 @@ export class Foreman {
     if (opts.config.backend === 'sim') this.status.message = 'Simulated team (sim backend)';
     this.initRoster();
     this.decisions.onCreated((d) => this.onDecisionCreated(d));
+    this.decisions.onSettled((d) => this.releaseFromUser(d.agentId));
   }
 
   // ---- event plumbing ---------------------------------------------------------------------
@@ -359,6 +362,28 @@ export class Foreman {
 
   createDecision(input: CreateDecisionInput): Decision {
     return this.decisions.create(input);
+  }
+
+  /**
+   * An agent stands at the user only while something is actually open for it.
+   *
+   * It used to be able to get stuck there: the permission gate puts the agent at the user and
+   * restores whatever it was doing afterwards, but when a second prompt opened while the first
+   * was up, the state it saved to restore WAS "waiting_user", so answering put it straight back.
+   * The agent then followed Noira around the HQ wearing the "!" with nothing behind it, and no
+   * stream event could move it (see the guard in codex/stream.ts). This runs whenever any
+   * decision stops being open, including cancellations, which have no waiter left to notice.
+   */
+  private releaseFromUser(agentId: string): void {
+    const a = this.agent(agentId);
+    if (!a || a.state !== 'waiting_user') return;
+    if (this.decisions.open().some((d) => d.agentId === agentId)) return;
+    // the backend knows whether a turn is still running; without one the agent is simply free
+    const busy = this.backend?.isBusy?.(agentId) ?? false;
+    this.setAgent(
+      agentId,
+      busy ? { state: 'thinking', station: 'desk', activity: 'carrying on' } : { state: 'idle', station: 'lounge', activity: 'free' },
+    );
   }
 
   private onDecisionCreated(d: Decision): void {

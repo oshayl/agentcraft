@@ -768,7 +768,11 @@ export class TeamBackend implements Backend {
         return { allow: true };
       }
       const prev = this.fm.agent(agentId);
-      const prevState = prev ? { state: prev.state, station: prev.station, activity: prev.activity } : undefined;
+      // Never remember "waiting_user" as the thing to go back to. A second prompt opening while
+      // the first is up would capture it, and answering would put the agent back at the user for
+      // good. When this is nested, releaseFromUser in foreman.ts settles where the agent lands.
+      const prevState =
+        prev && prev.state !== 'waiting_user' ? { state: prev.state, station: prev.station, activity: prev.activity } : undefined;
       const t = prev?.taskId;
       const d = this.fm.createDecision({
         agentId,
@@ -1259,6 +1263,11 @@ export class TeamBackend implements Backend {
     const notes = this.fm.memory.list().filter((e) => e.scope === 'shared' && e.updated >= goal.createdAt);
     this.enqueue({ kind: 'report', agentId: LEAD, goalId: goal.id, sessionKey, prompt: reportPrompt(this.fm, goal, notes) });
     this.fm.agentLog(LEAD, 'text', `Goal ${goal.id} finished: writing the artifact`);
+  }
+
+  /** A turn is running for this agent right now. */
+  isBusy(agentId: string): boolean {
+    return this.running.has(agentId);
   }
 
   onDecisionSettled(d: Decision): void {
