@@ -188,7 +188,7 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
     tool(
       'update_task',
       role === 'lead'
-        ? 'Update a task: status (todo|doing|blocked|cancelled; "doing" on a review task = request changes), summary/feedback, assignee, title, description.'
+        ? 'Update a task: status (todo|doing|blocked|cancelled; "doing" on a review task = request changes), summary/feedback, assignee, title, description, deps.'
         : 'Update YOUR task: status "review" when done (with summary of changes + testing), "blocked" with blocked_reason, or "doing".',
       {
         task_id: z.string(),
@@ -198,6 +198,10 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
         assignee: z.string().optional(),
         title: z.string().optional(),
         description: z.string().optional(),
+        deps: z
+          .array(z.string())
+          .optional()
+          .describe('the whole dependency list, replacing whatever it was. Use this when re-planning puts new work in front of a task that already exists'),
       },
       async (a) => {
         const t = fm.tasks.get(a.task_id);
@@ -207,13 +211,21 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
           if (t.assignee !== agentId) return fail(`${t.id} is not your task`);
           if (current && t.id !== current) return fail(`you are working on ${current}; you can only update that task. Tell Marlow (send_message to "lead") if ${t.id} is already covered.`);
           if (a.status && !['review', 'blocked', 'doing'].includes(a.status)) return fail('workers can set status review, blocked or doing');
-          if (a.assignee || a.title || a.description) return fail('only the lead can change assignee/title/description');
+          if (a.assignee || a.title || a.description || a.deps) return fail('only the lead can change assignee/title/description/deps');
         }
         try {
           if (a.assignee) {
             const id = fm.resolveAgentId(a.assignee);
             if (!id) return fail(`no agent ${a.assignee}`);
             fm.tasks.update(t.id, { assignee: id });
+          }
+          // Re-planning routinely puts new work in front of a task that already exists, and
+          // there was no way to say so: the lead had to write "clear this hold once t66 merges"
+          // into a blocked reason and trust somebody to remember. A dependency the graph
+          // enforces is not a note somebody has to read.
+          if (a.deps) {
+            for (const d of a.deps) if (!fm.tasks.get(d)) return fail(`no task ${d}`);
+            fm.tasks.update(t.id, { deps: a.deps });
           }
           if (a.title) fm.tasks.update(t.id, { title: a.title });
           if (a.description) fm.tasks.update(t.id, { description: a.description });

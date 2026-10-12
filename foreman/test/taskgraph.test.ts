@@ -37,6 +37,23 @@ describe('TaskGraph', () => {
     expect(fm.tasks.wouldCycle(c.id, [a.id])).toBe(false);
   });
 
+  it('lets a re-plan put new work in front of a task that already exists', () => {
+    const { fm } = setup();
+    // the shape that caught this: a release gate planned long ago, and a correction that has to
+    // land before it. The gate was created first, so its deps were frozen without the correction
+    // in them, and the lead had to write "clear this hold once t66 merges" into a blocked reason
+    // and trust somebody to read it.
+    const gate = fm.tasks.create({ title: 'Release gate', deps: [], createdBy: 'marlow' });
+    const fixDocs = fm.tasks.create({ title: 'Correct the release docs', createdBy: 'marlow' });
+    fm.tasks.update(gate.id, { deps: [fixDocs.id] });
+    expect(fm.tasks.get(gate.id)!.deps).toEqual([fixDocs.id]);
+    expect(fm.tasks.ready().map((t) => t.id)).not.toContain(gate.id);
+    fm.tasks.update(fixDocs.id, { assignee: 'wren' });
+    fm.tasks.setStatus(fixDocs.id, 'done', { force: true });
+    fm.tasks.update(gate.id, { assignee: 'wren' });
+    expect(fm.tasks.ready().map((t) => t.id)).toContain(gate.id);
+  });
+
   it('only starts a task when it has an assignee and its deps are done', () => {
     const { fm } = setup();
     const a = fm.tasks.create({ title: 'A', createdBy: 'marlow' });
