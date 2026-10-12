@@ -602,13 +602,41 @@ public class TaskScreen extends Screen {
 			} else {
 				feedback = switch (action) {
 					case "retry" -> "Queued again";
-					case "prioritize" -> "Moved to the top of the queue";
+					case "prioritize" -> {
+						// Priority only orders the tasks that CAN start. One whose dependencies
+						// are unmet will not run however high it is, and saying "moved to the
+						// top" while nothing happens is how a working button looks broken.
+						String waiting = unmetDeps();
+						yield waiting.isEmpty() ? "Moved to the top of the queue"
+							: "Top of the queue - but it still cannot start until " + waiting;
+					}
 					case "cancel" -> "Cancelled";
 					default -> "Reassigned to " + (arg == null ? "?" : nameOf(arg));
 				};
 				feedbackError = false;
 			}
 		});
+	}
+
+	/** The dependencies of the open task that are not done yet, as a readable list; "" when none. */
+	private String unmetDeps() {
+		ForemanState s = Foreman.state();
+		Task t = s == null || taskId == null ? null : s.task(taskId);
+		if (s == null || t == null) {
+			return "";
+		}
+		List<String> waiting = new ArrayList<>();
+		for (String d : t.deps()) {
+			Task dep = s.task(d);
+			if (dep != null && dep.status() != TaskStatus.DONE) {
+				waiting.add(d);
+			}
+		}
+		if (waiting.isEmpty()) {
+			return "";
+		}
+		List<String> shown = waiting.size() > 3 ? waiting.subList(0, 3) : waiting;
+		return String.join(", ", shown) + (waiting.size() > 3 ? " and " + (waiting.size() - 3) + " more" : "") + " finish";
 	}
 
 	private @Nullable String currentBlockedReason() {

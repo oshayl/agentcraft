@@ -714,6 +714,15 @@ export class TeamBackend implements Backend {
         if (!this.mayStart(teamId, waiting)) continue;
         if (this.handoffs.has(t.id)) continue; // the previous worker's turn is still winding down
         let w: string | undefined;
+        const onTeam = t.assignee ? this.fm.teamOf(t.assignee).id === teamId : false;
+        if (t.assignee && !onTeam && !this.isStopped(t.assignee)) {
+          // The task's repository belongs to one team and its assignee to another, so the
+          // intended worker can never come free for it and the task waits for ever without
+          // saying so. Hand it to the team that owns the repository and say what happened.
+          this.fm.bus.feed('task', `${t.id} was assigned to ${this.fm.nameOf(t.assignee)} (${this.fm.teamOf(t.assignee).name}) but its repo belongs to ${this.fm.teams.get(teamId)?.name ?? teamId}; reassigning`, { agentId: 'user' });
+          this.fm.tasks.update(t.id, { assignee: null });
+          t.assignee = undefined;
+        }
         if (t.assignee && this.team.includes(t.assignee) && !this.isStopped(t.assignee)) {
           if (!this.isFree(t.assignee, teamId)) continue; // wait for the intended worker
           w = t.assignee;

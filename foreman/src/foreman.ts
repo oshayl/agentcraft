@@ -345,7 +345,16 @@ export class Foreman {
    */
   currentGoalFor(teamId: string): Goal | undefined {
     const g = this.store.data.goals;
-    for (let i = g.length - 1; i >= 0; i--) if ((g[i]!.teamId ?? this.teams.primary().id) === teamId) return g[i];
+    const mine = (x: Goal) => (x.teamId ?? this.teams.primary().id) === teamId;
+    // The newest one still going, not just the newest. A goal that is done or cancelled keeps
+    // being "current" otherwise, and the next tasks the lead creates land on it - inheriting its
+    // repository. That is how five production tasks for The Movement ended up filed against a
+    // cancelled one-word goal on a client's site, assigned to workers who could never run them.
+    for (let i = g.length - 1; i >= 0; i--) {
+      const x = g[i]!;
+      if (mine(x) && x.status !== 'done' && x.status !== 'cancelled' && x.status !== 'failed') return x;
+    }
+    for (let i = g.length - 1; i >= 0; i--) if (mine(g[i]!)) return g[i];
     return undefined;
   }
 
