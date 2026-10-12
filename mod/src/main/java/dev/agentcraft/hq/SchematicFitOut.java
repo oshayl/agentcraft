@@ -202,6 +202,116 @@ final class SchematicFitOut {
 		}
 	}
 
+	/**
+	 * One storey of the house, opened up and fitted out as a working floor.
+	 *
+	 * <p>The build came as a house: bedrooms, a bathroom, partitions, and on the floor the stair
+	 * now arrives at, a wall two blocks behind the door. A team cannot work in that and an agent
+	 * cannot cross it - the pathfinder walks a grid, so a floor you can cross on the level is a
+	 * floor every desk on it can be reached from, and a floor cut into rooms is a floor where
+	 * half the anchors are unreachable from the other half.
+	 *
+	 * <p>So the storey is cleared inside its own shell - the glass, the outer walls, the floor,
+	 * the ceiling and the house's own stairs are all left exactly as the builder made them, so
+	 * from outside and from the street nothing has changed - and laid out as an office: a dark
+	 * tile floor with cable runs in it, a grid of light overhead, and a spine straight through
+	 * the middle from the door, with everything arranged either side of it rather than in it.
+	 *
+	 * @param doorZ where the stair arrives on the east side; the spine runs west from there
+	 * @return the walkable depth of the spine, or 0 when this storey has no room to open
+	 */
+	static int openFloor(Plan p, int floorY, int doorZ, int minX, int minZ, int maxX, int maxZ) {
+		List<Spot> ring = open(p, floorY, minX, minZ, maxX, maxZ);
+		if (ring.isEmpty()) {
+			return 0;
+		}
+		int x0 = Integer.MAX_VALUE;
+		int z0 = Integer.MAX_VALUE;
+		int x1 = Integer.MIN_VALUE;
+		int z1 = Integer.MIN_VALUE;
+		for (Spot s : ring) {
+			x0 = Math.min(x0, s.x());
+			z0 = Math.min(z0, s.z());
+			x1 = Math.max(x1, s.x());
+			z1 = Math.max(z1, s.z());
+		}
+		int spineZ = Math.max(z0 + 1, Math.min(z1 - 1, doorZ));
+		int ceiling = floorY + HEIGHT - 1;
+		for (int x = x0; x <= x1; x++) {
+			for (int z = z0; z <= z1; z++) {
+				if (p.isAir(x, floorY - 1, z)) {
+					continue; // a stairwell opening, or outside the plate: no floor to lay
+				}
+				if (!p.isAir(x, floorY, z) || !p.isAir(x, floorY + 1, z)) {
+					continue; // a wall, the house's stairs, something the builder put there
+				}
+				// the spine reads as a floor you are meant to walk down, not as leftover space
+				boolean spine = Math.abs(z - spineZ) <= 1;
+				p.set(x, floorY - 1, z, spine ? ModBlocks.TERRACOTTA_TILE.defaultBlockState() : ModBlocks.OAK_PARQUET.defaultBlockState());
+				if (spine && z == spineZ && (x - x0) % 3 == 0) {
+					p.set(x, floorY - 1, z, ModBlocks.WALNUT_TRIM.defaultBlockState());
+				}
+				boolean lit = (x - x0) % 4 == 2 && (z - z0) % 4 == 2;
+				if ((lit || (spine && z == spineZ && (x - x0) % 5 == 2)) && !p.isAir(x, ceiling + 1, z)) {
+					p.set(x, ceiling, z, ModBlocks.GLOW_PANEL.defaultBlockState());
+				}
+			}
+		}
+		benches(p, floorY, x0, z0, x1, z1, spineZ);
+		racks(p, floorY, x0, z0, x1, z1, spineZ);
+		return x1 - x0 + 1;
+	}
+
+	/**
+	 * Desks against the glass, facing out, in bays of two with a gap between them - the layout
+	 * the work floor upstairs uses, at the depth a house storey has. Monitors go on the desk
+	 * rather than the wall: there is glass behind these, and a monitor hung on glass is a
+	 * monitor floating over the garden.
+	 */
+	private static void benches(Plan p, int y, int x0, int z0, int x1, int z1, int spineZ) {
+		for (int side = 0; side < 2; side++) {
+			int zd = side == 0 ? z0 : z1;
+			Direction look = side == 0 ? Direction.NORTH : Direction.SOUTH;
+			if (Math.abs(zd - spineZ) <= 1) {
+				continue; // the spine comes out here; leave it clear
+			}
+			for (int x = x0 + 1; x <= x1 - 1; x++) {
+				if ((x - x0) % 4 == 0 || !p.isAir(x, y, zd) || !p.isAir(x, y + 1, zd)) {
+					continue;
+				}
+				if (p.isAir(x, y - 1, zd)) {
+					continue;
+				}
+				p.set(x, y, zd, St.slab(Blocks.DARK_OAK_SLAB, true));
+				p.set(x, y + 1, zd, ModBlocks.MONITOR.defaultBlockState().setValue(FacingEntityBlock.FACING, look.getOpposite()));
+				// the seat is the cell in front, so an agent sits looking at the screen
+				int zs = zd - look.getStepZ();
+				if (p.isAir(zs == zd ? x : x, y, zs) && !p.isAir(x, y - 1, zs)) {
+					p.set(x, y, zs, St.stairs(Blocks.DARK_OAK_STAIRS, look.getOpposite(), false));
+				}
+			}
+		}
+	}
+
+	/**
+	 * A rack bay at the blind end of the floor: the wall furthest from the door, where there is
+	 * no glass and nothing else wants to be. Terminals and lamps in a run, which is what makes a
+	 * floor read as a machine room rather than a cleared bedroom.
+	 */
+	private static void racks(Plan p, int y, int x0, int z0, int x1, int z1, int spineZ) {
+		int xw = x0;
+		for (int z = z0 + 1; z <= z1 - 1; z++) {
+			if (Math.abs(z - spineZ) <= 1 || !p.isAir(xw, y, z) || !p.isAir(xw, y + 1, z) || p.isAir(xw, y - 1, z)) {
+				continue;
+			}
+			p.set(xw, y, z, ModBlocks.WALNUT_PANEL.defaultBlockState());
+			p.set(xw, y + 1, z, (z - z0) % 2 == 0
+				? ModBlocks.STATUS_LAMP.defaultBlockState().setValue(dev.agentcraft.block.StatusLampBlock.STATUS, dev.agentcraft.block.LampStatus.IDLE)
+				: ModBlocks.MONITOR.defaultBlockState().setValue(FacingEntityBlock.FACING, Direction.EAST));
+			p.set(xw, y + 2, z, ModBlocks.WALNUT_PANEL.defaultBlockState());
+		}
+	}
+
 	/** Beds, bedside rugs and the rest of the bedroom, out of the whole building. */
 	static void stripBedrooms(Plan p, int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
 		for (int x = minX; x <= maxX; x++) {

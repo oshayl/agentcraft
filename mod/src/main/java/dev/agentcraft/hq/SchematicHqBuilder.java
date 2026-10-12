@@ -123,6 +123,20 @@ public final class SchematicHqBuilder implements HqBuilder {
 		// spiral replaces the ladders so an agent can actually walk between the floors.
 		SchematicFitOut.stripBedrooms(p, SITE_X, y0, SITE_Z, SITE_X + lit.sizeX - 1, y0 + lit.sizeY - 1, SITE_Z + lit.sizeZ - 1);
 		int[] b = lit.building(groundY);
+		// The storeys above the ground, opened up and fitted out as working floors. The ground
+		// floor is left alone: it is where you arrive, and it is the one the lobby opens onto.
+		// This runs before the stair, so the doorways it cuts land in a cleared room rather than
+		// two blocks in front of a bedroom wall.
+		int opened = 0;
+		if (b != null) {
+			int doorZ = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
+			int[] storeys = lit.floors(groundY);
+			for (int i = 1; i < storeys.length; i++) {
+				if (SchematicFitOut.openFloor(p, y0 + storeys[i], doorZ, SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3]) > 0) {
+					opened++;
+				}
+			}
+		}
 		java.util.Set<String> fitted = new java.util.LinkedHashSet<>();
 		Penthouse.Room room = null;
 		String stairFault = null;
@@ -159,7 +173,7 @@ public final class SchematicHqBuilder implements HqBuilder {
 				}
 			}
 			stairFault = Penthouse.check(p, tx, tz, bottom, room.y(), landings);
-			stairNote = landings.size() + " landing(s), " + bridged + " joined to the building";
+			stairNote = landings.size() + " landing(s), " + bridged + " joined to the building, " + opened + " storey(s) opened as working floors";
             if (poolDeck > 0) {
 				Amenities.passage(p, tx - Penthouse.TOWER_R - 1, tz, SITE_X + b[2], poolDeck);
 			}

@@ -251,6 +251,16 @@ final class Penthouse {
 		return null;
 	}
 
+	/** Could you stand in any of the three columns the link is cutting, at this x? */
+	private static boolean walkable(Plan p, int x, int y, int z) {
+		for (int dz = -1; dz <= 1; dz++) {
+			if (!p.get(x, y - 1, z + dz).isAir() && p.get(x, y, z + dz).isAir() && p.get(x, y + 1, z + dz).isAir()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** (dx, dz, y) as one key; the offsets keep every part positive without a sign to mask off. */
 	private static long cell(int dx, int dz, int y) {
 		return ((long) (dx + 8) << 40) | ((long) (dz + 8) << 24) | (y + 2048);
@@ -327,16 +337,25 @@ final class Penthouse {
 	 * @return true when it reached the building
 	 */
 	static boolean link(Plan p, int fromX, int z, int y, int reach) {
-		// Floor to stand on, not a clear cell: the link clears what is at head and foot height as
-		// it goes, so asking for an empty doorway here stopped at neither of the two storeys
-		// whose facade has a planter or a pane of glass on that line, and bulldozed eight blocks
-		// into the house looking for one.
+		// Where the floor really starts, which is two cells in, not one. Stopping at the first
+		// cell with something under it put the ground-floor doorway onto a two-by-three ledge
+		// with the house's wall behind it: somewhere to stand and nowhere to go. Asking that the
+		// cell beyond it be walkable too is what tells a floor from a sill, and it is asked of
+		// all three columns, because this facade has a pane on the middle one and a way past on
+		// the side. Floor with nothing beyond it is the fallback, so a doorway is never a drop.
 		int to = Integer.MIN_VALUE;
+		int ledge = Integer.MIN_VALUE;
 		for (int x = fromX - 1; x >= fromX - reach; x--) {
-			if (!p.get(x, y - 1, z).isAir()) {
+			if (ledge == Integer.MIN_VALUE && !p.get(x, y - 1, z).isAir()) {
+				ledge = x;
+			}
+			if (walkable(p, x, y, z) && walkable(p, x - 1, y, z)) {
 				to = x;
 				break;
 			}
+		}
+		if (to == Integer.MIN_VALUE) {
+			to = ledge;
 		}
 		// nothing to join: carve the whole reach anyway rather than leave a doorway onto a drop
 		boolean found = to != Integer.MIN_VALUE;
