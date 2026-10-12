@@ -1,0 +1,28 @@
+{
+  "variants": {
+    "tile=0": {
+      "model": "agentcraft:block/rug_shrigma_ink_0"
+    },
+    "tile=1": {
+      "model": "agentcraft:block/rug_shrigma_ink_1"
+    },
+    "tile=2": {
+      "model": "agentcraft:block/rug_shrigma_ink_2"
+    },
+    "tile=3": {
+      "model": "agentcraft:block/rug_shrigma_ink_3"
+    },
+    "tile=4": {
+      "model": "agentcraft:block/rug_shrigma_ink_4"
+    },
+    "tile=5": {
+      "model": "agentcraft:block/rug_shrigma_ink_5"
+    },
+    "tile=6": {
+      "model": "agentcraft:block/rug_shrigma_ink_6"
+    },
+    "tile=7": {
+      "model": "agentcraft:block/rug_shrigma_ink_7"
+    }
+  }
+}

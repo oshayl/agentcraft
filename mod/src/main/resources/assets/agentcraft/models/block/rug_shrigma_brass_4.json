@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/carpet",
+  "textures": {
+    "wool": "agentcraft:block/rug_shrigma_brass_4",
+    "particle": "agentcraft:block/rug_shrigma_brass_4"
+  }
+}

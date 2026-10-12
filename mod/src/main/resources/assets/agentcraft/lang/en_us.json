@@ -36,5 +36,9 @@
   "key.agentcraft.console": "Open the console",
   "key.agentcraft.console_terminal": "Console (looking at a terminal)",
   "key.agentcraft.decisions": "Answer decisions",
-  "key.agentcraft.permissions": "Toggle permission mode"
+  "key.agentcraft.permissions": "Toggle permission mode",
+  "block.agentcraft.rug_noira_ink": "Noira Rug (Ink)",
+  "block.agentcraft.rug_noira_brass": "Noira Rug (Brass)",
+  "block.agentcraft.rug_shrigma_ink": "Shrigma Rug (Ink)",
+  "block.agentcraft.rug_shrigma_brass": "Shrigma Rug (Brass)"
 }

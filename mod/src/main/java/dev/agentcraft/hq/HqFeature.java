@@ -59,6 +59,7 @@ public final class HqFeature {
 			}
 		});
 		registerHere();
+		registerRug();
 		AgentCraftCommands.sub(root -> root.then(Commands.literal("hq")
 			.executes(ctx -> build(ctx, HqBuilders.defaultId(), false))
 			.then(Commands.literal("force").executes(ctx -> build(ctx, HqBuilders.defaultId(), true)))
@@ -171,6 +172,38 @@ public final class HqFeature {
 		ctx.getSource().sendSuccess(() -> Component.literal("Removed '" + id + "': " + cleared + " blocks back to meadow. /agentcraft hq " + id
 			+ " builds it again."), true);
 		return cleared;
+	}
+
+	/**
+	 * {@code /agentcraft rug <name>}: lays a whole brand rug at your feet. A rug is several
+	 * blocks, each holding one slice of the mark, so placing one by hand would mean setting a
+	 * tile number on every block.
+	 */
+	private static void registerRug() {
+		AgentCraftCommands.sub(root -> root.then(Commands.literal("rug")
+			.then(Commands.argument("rug", StringArgumentType.word())
+				.suggests((ctx, b) -> {
+					for (var e : dev.agentcraft.block.ModBlocks.rugs().entrySet()) {
+						b.suggest(e.getKey());
+					}
+					return b.buildFuture();
+				})
+				.executes(ctx -> {
+					String name = StringArgumentType.getString(ctx, "rug");
+					dev.agentcraft.block.RugBlock rug = dev.agentcraft.block.ModBlocks.rugs().get(name);
+					if (rug == null) {
+						ctx.getSource().sendFailure(Component.literal("No rug '" + name + "' (have: "
+							+ String.join(", ", dev.agentcraft.block.ModBlocks.rugs().keySet()) + ")"));
+						return 0;
+					}
+					var player = ctx.getSource().getPlayerOrException();
+					// laid out in front of you, north-west corner at your feet
+					BlockPos origin = player.blockPosition();
+					rug.lay(player.level(), origin);
+					ctx.getSource().sendSuccess(() -> Component.literal("Laid " + name + " (" + rug.width() + "x" + rug.depth()
+						+ ") at " + origin.getX() + " " + origin.getY() + " " + origin.getZ()), true);
+					return 1;
+				}))));
 	}
 
 	private static boolean autoBuild() {

@@ -52,6 +52,19 @@ public final class ModBlocks {
 		BlockBehaviour.Properties.of().mapColor(MapColor.QUARTZ).strength(0.5f).sound(SoundType.GLASS).lightLevel(s -> 15));
 	public static final Block GLOW_STRIP = register("glow_strip", GlowStripBlock::new,
 		nonOpaque().mapColor(MapColor.QUARTZ).instabreak().noCollision().sound(SoundType.GLASS).lightLevel(s -> 12));
+	/**
+	 * Brand rugs: a carpet whose cloth is a logo, with the background left transparent.
+	 *
+	 * <p>This is the one place a mark can be transparent. A painting is drawn by an entity
+	 * render type that ignores alpha outright, so a logo on a see-through background comes out
+	 * as a solid block of colour; a block picks its layer from its sprite, so the floor shows
+	 * through the gaps exactly as it should.
+	 */
+	public static final Block RUG_NOIRA_INK = register("rug_noira_ink", p -> new RugBlock(p, 2, 3), rug());
+	public static final Block RUG_NOIRA_BRASS = register("rug_noira_brass", p -> new RugBlock(p, 2, 3), rug());
+	public static final Block RUG_SHRIGMA_INK = register("rug_shrigma_ink", p -> new RugBlock(p, 4, 2), rug());
+	public static final Block RUG_SHRIGMA_BRASS = register("rug_shrigma_brass", p -> new RugBlock(p, 4, 2), rug());
+
 	public static final Block PLASTER_PANEL = register("plaster_panel", Block::new, plaster());
 	public static final Block PLASTER_FRAME = register("plaster_frame", Block::new, plaster());
 	public static final Block WALNUT_PANEL = register("walnut_panel", Block::new, wood(MapColor.COLOR_BROWN));
@@ -97,6 +110,20 @@ public final class ModBlocks {
 
 	private static BlockBehaviour.Properties panel() {
 		return nonOpaque();
+	}
+
+	/** The brand rugs by the short name {@code /agentcraft rug} takes. */
+	public static java.util.Map<String, RugBlock> rugs() {
+		java.util.Map<String, RugBlock> out = new java.util.LinkedHashMap<>();
+		out.put("noira-ink", (RugBlock) RUG_NOIRA_INK);
+		out.put("noira-brass", (RugBlock) RUG_NOIRA_BRASS);
+		out.put("shrigma-ink", (RugBlock) RUG_SHRIGMA_INK);
+		out.put("shrigma-brass", (RugBlock) RUG_SHRIGMA_BRASS);
+		return out;
+	}
+
+	private static BlockBehaviour.Properties rug() {
+		return nonOpaque().mapColor(MapColor.WOOL).strength(0.1f).sound(SoundType.WOOL).noOcclusion();
 	}
 
 	private static BlockBehaviour.Properties plaster() {

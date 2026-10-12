@@ -1,0 +1,22 @@
+{
+  "variants": {
+    "tile=0": {
+      "model": "agentcraft:block/rug_noira_brass_0"
+    },
+    "tile=1": {
+      "model": "agentcraft:block/rug_noira_brass_1"
+    },
+    "tile=2": {
+      "model": "agentcraft:block/rug_noira_brass_2"
+    },
+    "tile=3": {
+      "model": "agentcraft:block/rug_noira_brass_3"
+    },
+    "tile=4": {
+      "model": "agentcraft:block/rug_noira_brass_4"
+    },
+    "tile=5": {
+      "model": "agentcraft:block/rug_noira_brass_5"
+    }
+  }
+}

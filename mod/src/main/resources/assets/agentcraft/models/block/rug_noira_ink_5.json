@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/carpet",
+  "textures": {
+    "wool": "agentcraft:block/rug_noira_ink_5",
+    "particle": "agentcraft:block/rug_noira_ink_5"
+  }
+}
