@@ -26,6 +26,25 @@ export interface DevResult {
 
 const CHECK_MS = 10 * 60_000;
 
+// The one slow step running right now, if any. Two reasons to know: a reload exits the process a
+// moment after it answers, which would take a running check down with it and leave the console
+// saying "running the tests" forever; and two npm checks in one directory tread on each other's
+// temporary files, so the second would be reporting noise.
+let inFlight: DevAction | null = null;
+
+/** Which slow step is running, if one is. */
+export function devInFlight(): DevAction | null {
+  return inFlight;
+}
+
+/** Marks a slow step as running; the caller releases it when the work settles. */
+export function devBegin(action: DevAction): () => void {
+  inFlight = action;
+  return () => {
+    if (inFlight === action) inFlight = null;
+  };
+}
+
 /**
  * Runs one step of the loop in the AgentCraft checkout the Foreman is running from.
  *
@@ -65,6 +84,9 @@ export async function dev(ctx: Ctx, projectRoot: string, action: DevAction): Pro
     case 'reload': {
       // Exit and let the service manager bring it back. State is written on the way out and
       // in-flight turns are resumed, so this costs seconds rather than work.
+      if (inFlight) {
+        return { lines: [`not reloading: ${inFlight} is still running, and reloading now would kill it without a word. Try again when it reports.`] };
+      }
       return { lines: ['Reloading the Foreman. Your agents resume where they were; the game reconnects by itself.'], restarting: true };
     }
     case 'restart-game': {

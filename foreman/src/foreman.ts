@@ -30,7 +30,7 @@ import type {
   Task, PermissionMode,} from './protocol.js';
 import { MERGE_WITH_ASIDE_OPTION, MERGE_WITH_LAND_OPTION } from './protocol.js';
 import { formatUncommittedReview, RepoError, RepoManager } from './repos.js';
-import { dev } from './selfhost.js';
+import { dev, devBegin, devInFlight } from './selfhost.js';
 import { Store } from './store.js';
 import { TaskError, TaskGraph } from './taskgraph.js';
 import { setUserName, userName } from './user.js';
@@ -683,13 +683,21 @@ export class Foreman {
         // feed when they finish; the quick ones answer as usual.
         const slow = msg.action === 'check' || msg.action === 'build';
         if (slow) {
+          const already = devInFlight();
+          if (already) {
+            const line = `${already} is already running; its result will appear here.`;
+            this.bus.feed('system', line);
+            return { lines: [line] };
+          }
           const started = msg.action === 'check' ? 'Running the Foreman typecheck and tests...' : 'Compiling the mod...';
           this.bus.feed('system', started);
+          const done = devBegin(msg.action);
           void dev(this.ctx, this.config.projectRoot, msg.action)
             .then((r) => {
               for (const l of r.lines) this.bus.feed('system', l);
             })
-            .catch((e) => this.bus.feed('error', `${msg.action} failed to run: ${(e as Error).message}`));
+            .catch((e) => this.bus.feed('error', `${msg.action} failed to run: ${(e as Error).message}`))
+            .finally(done);
           return { lines: [started] };
         }
         const r = await dev(this.ctx, this.config.projectRoot, msg.action);
