@@ -1127,6 +1127,14 @@ export class TeamBackend implements Backend {
 
   private async openMergeDecision(t: Task, summary: string): Promise<void> {
     const wt = this.fm.repos.requireWorktree(t.repoId!, t.worktree!);
+    // A branch that already landed has nothing to approve. Asking anyway puts a card on the
+    // board that refuses every answer, which is what happened to t54: merged, reviewed again,
+    // and then four clicks on Merge with the refusal scrolled off the bottom of the card.
+    if (wt.status === 'merged') {
+      this.fm.tasks.setStatus(t.id, 'done', { viaMerge: true, force: true });
+      this.fm.bus.feed('merge', `${t.id} was already merged into ${wt.base}: nothing to approve`, { agentId: t.assignee ?? LEAD });
+      return;
+    }
     // A merge is refused while the checkout holding the base branch has modified tracked files.
     // Rather than let the user discover that only when they click Merge, review their work here
     // and offer to commit it as part of the same answer.

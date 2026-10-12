@@ -29,7 +29,7 @@ import { slugify, tailLines } from './util/text.js';
 export class RepoError extends Error {
   constructor(
     message: string,
-    readonly code: 'not_found' | 'not_git' | 'no_commits' | 'refused' | 'conflict' | 'dirty' | 'empty' | 'untracked' | 'failed' = 'failed',
+    readonly code: 'not_found' | 'not_git' | 'no_commits' | 'refused' | 'conflict' | 'dirty' | 'empty' | 'untracked' | 'already_merged' | 'failed' = 'failed',
     /** code 'conflict': the files that would conflict; code 'untracked': the ones in the way */
     readonly files: string[] = [],
   ) {
@@ -771,6 +771,7 @@ export class RepoManager {
   async canMerge(repoId: string, worktreeId: string): Promise<{ ok: true } | { ok: false; reason: string; code: RepoError['code']; files?: string[] }> {
     const r = this.require(repoId);
     const w = this.requireWorktree(repoId, worktreeId);
+    if (w.status === 'merged') return { ok: false, reason: `${w.branch} is already merged into ${w.base}`, code: 'already_merged' };
     if (w.status !== 'active') return { ok: false, reason: `worktree ${w.id} is ${w.status}`, code: 'refused' };
     const target = await this.checkoutOf(r, w.base);
     if (target && (await this.isDirty(target))) {
@@ -870,6 +871,7 @@ export class RepoManager {
     const r = this.require(decision.repoId);
     const w = this.requireWorktree(r.id, decision.worktree);
     if (w.id !== decision.worktree) throw new RepoError(`decision ${decision.id} targets ${decision.worktree}, not ${w.id}`, 'refused');
+    if (w.status === 'merged') throw new RepoError(`${w.branch} is already merged into ${w.base}`, 'already_merged');
     if (w.status !== 'active') throw new RepoError(`worktree ${w.id} is ${w.status}`, 'refused');
 
     // 1. make sure the agent's work is committed on its branch

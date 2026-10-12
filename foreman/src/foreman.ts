@@ -436,6 +436,14 @@ export class Foreman {
           this.notify('info', `${task.id} had no changes: closed as done`);
           return;
         }
+        if (e instanceof RepoError && e.code === 'already_merged') {
+          // the branch landed earlier and the decision outlived it: resolve the card rather than
+          // leaving it on the board refusing a merge that has already happened
+          if (task && task.status !== 'done') this.tasks.setStatus(task.id, 'done', { viaMerge: true, force: true });
+          this.bus.feed('merge', `${d.taskId ?? 'That branch'} was already merged: closing the review`, { agentId: d.agentId });
+          this.notify('info', `${d.taskId ?? 'That branch'} was already merged`);
+          return;
+        }
         const reason = e instanceof RepoError ? e.message : `merge failed: ${(e as Error).message}`;
         if (e instanceof RepoError && e.code === 'conflict' && task?.assignee && d.repoId && d.worktree && this.backend?.onMergeConflict) {
           // parallel tasks touched the same lines: the branch's worker merges the base and resolves
@@ -456,8 +464,8 @@ export class Foreman {
           }
         }
         this.log.warn(`merge for ${d.id} refused: ${reason}`);
-        const base = (d.context ?? '').replace(/\n*Merge refused: [\s\S]*$/, '');
-        this.decisions.reopen(d.id, `${base}${base ? '\n\n' : ''}Merge refused: ${reason}`);
+        const base = (d.context ?? '').replace(/^Merge refused: .*\n+/, '').replace(/\n*Merge refused: [\s\S]*$/, '');
+        this.decisions.reopen(d.id, `Merge refused: ${reason}\n\n${base}`);
         this.bus.feed('error', `Merge refused: ${reason}`, { agentId: d.agentId });
         this.notify('warn', `Merge refused: ${truncate(reason, 160)}`, d.id);
         // broadcast the repo as it is now (e.g. dirty=true), so the mod can show why
