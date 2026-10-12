@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Artifacts, Notes, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -79,6 +79,10 @@ public final class ConsoleCommands {
 
 	/** Browse a read-only folder (an Obsidian vault) in the library. {@code query} null = everything. */
 	public record Notes(String source, @Nullable String query) implements Intent {
+	}
+
+	/** One step of the AgentCraft dev loop: check | build | reload | restart-game. */
+	public record Dev(String action) implements Intent {
 	}
 
 	public record Repos() implements Intent {
@@ -134,6 +138,7 @@ public final class ConsoleCommands {
 		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
 		new Command("artifacts", "/artifacts [id]", "what the team finished, with its open items"),
 		new Command("notes", "/notes [folder] [search]", "read your own markdown folders (vault, docs)"),
+		new Command("dev", "/dev check|build|reload|restart-game", "work on AgentCraft itself from in here"),
 		new Command("status", "/status", "goal, agents, tasks and decisions"),
 		new Command("sound", "/sound on|off", "decision bell and done chime"),
 		new Command("clear", "/clear", "clear the console's own lines"),
@@ -211,6 +216,7 @@ public final class ConsoleCommands {
 			case "caps", "capabilities", "access" -> parseCaps(args, s);
 			case "artifacts", "artifact", "result", "results" -> new Artifacts(args.isEmpty() ? null : args.get(0));
 			case "notes", "vault", "library", "read" -> parseNotes(cmd, rest, args);
+			case "dev" -> parseDev(args);
 			case "pause", "resume", "stop", "spawn" -> parseAgentAction(cmd, args, s);
 			case "task", "t" -> parseTask(args, s);
 			case "diff" -> parseDiff(args, s);
@@ -367,6 +373,24 @@ public final class ConsoleCommands {
 			}
 		}
 		return new Notes(source, query.isEmpty() ? null : query);
+	}
+
+	static final List<String> DEV_ACTIONS = List.of("check", "build", "reload", "restart-game");
+	static final java.util.Map<String, String> DEV_HINTS = java.util.Map.of(
+		"check", "the Foreman's typecheck and tests",
+		"build", "compile the mod",
+		"reload", "restart the Foreman; turns resume, the game reconnects",
+		"restart-game", "restart the client; the Foreman and your work stay up");
+
+	private static Intent parseDev(List<String> args) {
+		if (args.isEmpty()) {
+			return new Invalid("usage: /dev " + String.join("|", DEV_ACTIONS));
+		}
+		String a = args.get(0).toLowerCase(Locale.ROOT);
+		if (a.equals("restart") || a.equals("game")) {
+			a = "restart-game";
+		}
+		return DEV_ACTIONS.contains(a) ? new Dev(a) : new Invalid("unknown /dev step '" + a + "': " + String.join(", ", DEV_ACTIONS));
 	}
 
 	private static final List<String> FIX_ACTIONS = List.of("report", "review", "land", "aside", "park", "unpark", "deps");
@@ -669,6 +693,7 @@ public final class ConsoleCommands {
 				: (c.role() == null ? "" : c.role() + " in ") + repoName(c.repoId(), s) + ": " + c.caps();
 			case Artifacts a -> a.id() == null ? "open the artifacts" : "open artifact " + a.id();
 			case Notes n -> n.query() == null ? "open " + n.source() : "search " + n.source() + ": " + n.query();
+			case Dev dv -> "dev: " + dv.action();
 			case Repos r -> "list repos";
 			case AgentAction a -> a.action() + " " + (a.agentIds().size() == 1 ? displayName(a.agentIds().get(0), s) : a.agentIds().size() + " agents");
 			case TaskAction t -> t.action() + " " + t.taskId();
@@ -855,6 +880,15 @@ public final class ConsoleCommands {
 							if (r.startsWith(lower)) {
 								out.add(new Completion(ts, cursor, r + " ", r, r.equals("lead") ? "Marlow only" : "the workers only", null, null));
 							}
+						}
+					}
+				}
+			}
+			case "/dev" -> {
+				if (argIndex == 1) {
+					for (String a : DEV_ACTIONS) {
+						if (a.startsWith(lower)) {
+							out.add(new Completion(ts, cursor, a, a, DEV_HINTS.get(a), null, null));
 						}
 					}
 				}
@@ -1070,6 +1104,7 @@ public final class ConsoleCommands {
 			}
 			case Permissions p -> m.put("mode", p.mode());
 			case Artifacts a -> m.put("id", a.id());
+			case Dev dv -> m.put("action", dv.action());
 			case Notes n -> {
 				m.put("source", n.source());
 				m.put("query", n.query());

@@ -26,6 +26,23 @@ import { agentGitIdentity, git, gitConfigGet, gitOut, identityEnv, listWorktrees
 import { runShell } from './util/proc.js';
 import { slugify, tailLines } from './util/text.js';
 
+/**
+ * What to call a repository.
+ *
+ * A linked worktree's own folder name says nothing about the project - it is whatever the tool
+ * that made it chose - so the name comes from the directory holding the shared git data, which
+ * is the main checkout. A normal clone is its own common dir and is unaffected.
+ */
+async function repoLabel(root: string): Promise<string> {
+  const common = await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir'], { allowFail: true });
+  const dir = common.code === 0 ? common.stdout.trim() : '';
+  if (dir && path.basename(dir) === '.git') {
+    const main = path.basename(path.dirname(dir));
+    if (main) return main;
+  }
+  return path.basename(root);
+}
+
 export class RepoError extends Error {
   constructor(
     message: string,
@@ -278,9 +295,13 @@ export class RepoManager {
     if (head.code !== 0) throw new RepoError(`repository has no commits yet: ${root}`, 'no_commits');
     const branch = (await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFail: true })).stdout.trim();
     if (!branch) throw new RepoError(`repository is in detached HEAD state; check out a branch first: ${root}`, 'refused');
-    let id = slugify(path.basename(root), 24);
-    for (let i = 2; this.get(id); i++) id = `${slugify(path.basename(root), 20)}-${i}`;
-    const repo: Repo = { id, name: path.basename(root), path: root, branch, dirty: false, worktrees: [], ci: 'unknown' };
+    // A worktree's folder is not the repository's name - AgentCraft's own checkout came up as
+    // "abalone", the random word its worktree directory happens to be called. The repository is
+    // whatever the shared git directory belongs to.
+    const label = await repoLabel(root);
+    let id = slugify(label, 24);
+    for (let i = 2; this.get(id); i++) id = `${slugify(label, 20)}-${i}`;
+    const repo: Repo = { id, name: label, path: root, branch, dirty: false, worktrees: [], ci: 'unknown' };
     this.repos.push(repo);
     await this.refresh(id);
     return repo;

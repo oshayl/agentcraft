@@ -30,6 +30,7 @@ import type {
   Task, PermissionMode,} from './protocol.js';
 import { MERGE_WITH_ASIDE_OPTION, MERGE_WITH_LAND_OPTION } from './protocol.js';
 import { formatUncommittedReview, RepoError, RepoManager } from './repos.js';
+import { dev } from './selfhost.js';
 import { Store } from './store.js';
 import { TaskError, TaskGraph } from './taskgraph.js';
 import { setUserName, userName } from './user.js';
@@ -675,6 +676,30 @@ export class Foreman {
           reply({ type: 'library', requestId: msg.requestId, source: msg.source, items: [], error: (e as Error).message });
         }
         return undefined;
+      }
+      case 'dev.action': {
+        // A check is half a minute of tests and a build is longer, which is well past the time a
+        // client waits for an ack. So the long ones say they have started and report into the
+        // feed when they finish; the quick ones answer as usual.
+        const slow = msg.action === 'check' || msg.action === 'build';
+        if (slow) {
+          const started = msg.action === 'check' ? 'Running the Foreman typecheck and tests...' : 'Compiling the mod...';
+          this.bus.feed('system', started);
+          void dev(this.ctx, this.config.projectRoot, msg.action)
+            .then((r) => {
+              for (const l of r.lines) this.bus.feed('system', l);
+            })
+            .catch((e) => this.bus.feed('error', `${msg.action} failed to run: ${(e as Error).message}`));
+          return { lines: [started] };
+        }
+        const r = await dev(this.ctx, this.config.projectRoot, msg.action);
+        for (const l of r.lines) this.bus.feed('system', l);
+        if (r.restarting) {
+          // the answer has to reach the client before the process goes
+          this.store.flush();
+          setTimeout(() => process.exit(0), 400).unref?.();
+        }
+        return { lines: r.lines };
       }
       case 'caps.set': {
         const repos = msg.repoId ? [this.repos.require(msg.repoId)] : this.repos.list();

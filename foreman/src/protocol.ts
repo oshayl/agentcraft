@@ -449,6 +449,15 @@ export const PermissionModeSetMsg = z.object({
   ...envelope('permissions.set'),
   mode: PermissionMode.optional().describe('omitted = cycle to the next mode'),
 });
+export const DevActionMsg = z.object({
+  ...envelope('dev.action'),
+  action: z
+    .enum(['check', 'build', 'reload', 'restart-game'])
+    .describe(
+      "working on AgentCraft from inside it: check runs the Foreman's tests and typecheck, build compiles the mod, reload restarts the Foreman (turns resume, the game reconnects), restart-game restarts the client (the Foreman keeps running)",
+    ),
+});
+
 export const LibraryRequestMsg = z.object({
   ...envelope('library.request'),
   requestId: z.string().min(1),
@@ -488,6 +497,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   PermissionModeSetMsg,
   CapsSetMsg,
   LibraryRequestMsg,
+  DevActionMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -572,6 +582,10 @@ export const CLIENT_MESSAGES = {
   'library.request': {
     schema: LibraryRequestMsg,
     doc: 'Browse a read-only markdown folder configured as a library (config.json `library`): the index, or one note. Answered with `library` to the asking client only.',
+  },
+  'dev.action': {
+    schema: DevActionMsg,
+    doc: 'Run one step of the AgentCraft dev loop from in game (`/dev check|build|reload|restart-game`). Answered with `{lines}`, which are also written to the feed.',
   },
   'caps.set': {
     schema: CapsSetMsg,

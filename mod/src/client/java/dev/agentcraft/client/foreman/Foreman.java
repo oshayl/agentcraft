@@ -110,6 +110,11 @@ public final class Foreman {
 		return link.requestLibrary(source, noteId, query, limit);
 	}
 
+	/** One step of the AgentCraft dev loop: check | build | reload | restart-game. */
+	public static CompletableFuture<Ack> dev(String action) {
+		return link.send(ForemanJson.msg("dev.action").put("action", action).json());
+	}
+
 	/** Structured diff of a worktree (or an agent id: its current worktree) vs its base. */
 	public static CompletableFuture<Diff> requestDiff(String repoId, String worktree) {
 		return link.requestDiff(repoId, worktree);

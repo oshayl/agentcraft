@@ -48,6 +48,19 @@ describe('RepoManager', () => {
     expect(h.fm.repos.list().map((r) => r.id)).toEqual(['demo-app']);
   });
 
+  it('names a linked worktree after its repository, not its own folder', async () => {
+    // AgentCraft's own checkout is a worktree in a folder called "abalone", and that is the name
+    // it came up with in game. A worktree's folder name is an accident; the repository is not.
+    const wt = path.join(tempDir(), 'abalone');
+    await git(repoPath, ['worktree', 'add', '-q', '-b', 'side', wt]);
+    const own = makeForeman(tempDir(), ['--backend', 'sim']);
+    const r = await own.fm.repos.add(wt);
+    expect([r.id, r.name]).toEqual(['demo-app', 'demo-app']);
+    expect(path.basename(r.path)).toBe('abalone');
+    await git(repoPath, ['worktree', 'remove', '--force', wt]);
+    await git(repoPath, ['branch', '-qD', 'side']);
+  });
+
   it('creates a per-worker worktree on agentcraft/<agent>/<task-slug>', async () => {
     const t = h.fm.tasks.create({ title: 'Tag parser module (src/tags.ts)', createdBy: 'marlow', repoId: 'demo-app', assignee: 'kit' });
     const wt = await h.fm.repos.createWorktree('demo-app', 'kit', t);

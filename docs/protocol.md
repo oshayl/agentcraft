@@ -1106,6 +1106,24 @@ Browse a read-only markdown folder configured as a library (config.json `library
 }
 ```
 
+### `dev.action`
+
+Run one step of the AgentCraft dev loop from in game (`/dev check|build|reload|restart-game`). Answered with `{lines}`, which are also written to the feed.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `action` | `check` \| `build` \| `reload` \| `restart-game` | yes | working on AgentCraft from inside it: check runs the Foreman's tests and typecheck, build compiles the mod, reload restarts the Foreman (turns resume, the game reconnects), restart-game restarts the client (the Foreman keeps running) |
+
+```json
+{
+  "v": 1,
+  "type": "dev.action",
+  "id": "c23",
+  "action": "check"
+}
+```
+
 ### `caps.set`
 
 Change how far one repository's agents may reach, from the console (`/caps [repo] [lead|worker] <list>`), without editing config.json or restarting. Answered with `{lines}`, which are also written to the feed. The override is per repo, persists across restarts, and wins over the roles in config.json; an agent whose capabilities changed starts a fresh thread on its next turn.

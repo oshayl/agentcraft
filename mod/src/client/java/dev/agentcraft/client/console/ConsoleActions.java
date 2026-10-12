@@ -14,6 +14,7 @@ import dev.agentcraft.client.console.ConsoleCommands.Message;
 import dev.agentcraft.client.console.ConsoleCommands.RepoAdd;
 import dev.agentcraft.client.console.ConsoleCommands.Artifacts;
 import dev.agentcraft.client.console.ConsoleCommands.Caps;
+import dev.agentcraft.client.console.ConsoleCommands.Dev;
 import dev.agentcraft.client.console.ConsoleCommands.Notes;
 import dev.agentcraft.client.console.ConsoleCommands.Permissions;
 import dev.agentcraft.client.console.ConsoleCommands.RepoFix;
@@ -161,6 +162,19 @@ public final class ConsoleActions {
 				dev.agentcraft.client.library.LibraryFeature.open(n.source(), null);
 				return After.CLOSE;
 			}
+			case Dev dv -> track(Foreman.dev(dv.action()), raw, restore, ack -> {
+				if (ack.result() != null && ack.result().has("lines")) {
+					com.google.gson.JsonArray ls = ack.result().getAsJsonArray("lines");
+					StringBuilder b = new StringBuilder();
+					for (int i = 0; i < ls.size(); i++) {
+						b.append(i > 0 ? " \u00b7 " : "").append(ls.get(i).getAsString());
+					}
+					if (b.length() > 0) {
+						return b.toString();
+					}
+				}
+				return "done " + UiBits.CHECK;
+			}, dv.action().equals("check") ? "running the tests\u2026" : dv.action().equals("build") ? "compiling the mod\u2026" : dv.action() + "\u2026");
 			case Decide d -> {
 				ConsoleLog.remember(raw);
 				clearFeedback();
