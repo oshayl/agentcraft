@@ -102,6 +102,16 @@ public final class Foreman {
 	}
 
 	/**
+	 * Create, change or disband a team. Everything but {@code teamId} is optional; with none of
+	 * it, the Foreman reports every team and changes nothing.
+	 */
+	public static CompletableFuture<Ack> setTeam(@Nullable String teamId, @Nullable String name, @Nullable String lead,
+		java.util.@Nullable List<String> members, java.util.@Nullable List<String> repos, @Nullable Integer floor, boolean disband) {
+		return link.send(ForemanJson.msg("team.set").put("teamId", teamId).put("name", name).put("lead", lead)
+			.put("members", members).put("repos", repos).put("floor", floor).put("disband", disband ? Boolean.TRUE : null).json());
+	}
+
+	/**
 	 * A read-only markdown folder (config.json {@code library}): the index, or one note with its
 	 * body when {@code noteId} is given. Nothing of these folders is in the snapshot - a vault is
 	 * thousands of notes - so the library asks for what it is about to show.

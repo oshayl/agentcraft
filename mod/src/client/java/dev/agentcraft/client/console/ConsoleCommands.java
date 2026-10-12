@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Team, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -71,6 +71,14 @@ public final class ConsoleCommands {
 	 * "default" (back to the config file); null = report. {@code role} null = lead and workers.
 	 */
 	public record Caps(@Nullable String repoId, @Nullable String role, @Nullable String caps) implements Intent {
+	}
+
+	/**
+	 * Create, change or disband a team. Everything but {@code teamId} may be null, and all of it
+	 * null reports the teams instead of changing one.
+	 */
+	public record Team(@Nullable String teamId, @Nullable String name, @Nullable String lead, @Nullable List<String> members,
+		@Nullable List<String> repos, @Nullable Integer floor, boolean disband) implements Intent {
 	}
 
 	/** Open the library on the Artifacts tab. {@code id} null = the newest artifact. */
@@ -136,6 +144,7 @@ public final class ConsoleCommands {
 		new Command("fix", "/fix [review|land|aside|park|unpark|deps] [repo]", "review or clear what is blocking work"),
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
+		new Command("team", "/team [<id> lead @agent [repos a,b] [with @a,@b] [floor n] | <id> disband]", "who works on what, and under whom"),
 		new Command("artifacts", "/artifacts [id]", "what the team finished, with its open items"),
 		new Command("notes", "/notes [folder] [search]", "read your own markdown folders (vault, docs)"),
 		new Command("dev", "/dev check|build|reload|restart-game", "work on AgentCraft itself from in here"),
@@ -214,6 +223,7 @@ public final class ConsoleCommands {
 			case "fix" -> parseFix(args, s);
 			case "permissions", "perms" -> parsePermissions(args);
 			case "caps", "capabilities", "access" -> parseCaps(args, s);
+			case "team", "teams" -> parseTeam(args, s);
 			case "artifacts", "artifact", "result", "results" -> new Artifacts(args.isEmpty() ? null : args.get(0));
 			case "notes", "vault", "library", "read" -> parseNotes(cmd, rest, args);
 			case "dev" -> parseDev(args);
@@ -290,6 +300,79 @@ public final class ConsoleCommands {
 		"write", "the lead may change files, like a worker",
 		"force", "force-push, delete a branch, push to a base branch");
 	private static final List<String> CAP_ROLES = List.of("lead", "worker", "workers", "both");
+
+	/**
+	 * {@code /team} reports them; {@code /team clients lead @juniper repos travis-murphy with
+	 * @rowan,@tove floor 1} makes one. Written as keywords rather than fixed positions because
+	 * every part of it is optional and three optional positions in a row is a command nobody can
+	 * remember the order of.
+	 */
+	private static Intent parseTeam(List<String> args, ForemanState s) {
+		if (args.isEmpty()) {
+			return new Team(null, null, null, null, null, null, false);
+		}
+		String id = args.get(0).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9-]+", "-");
+		if (id.isEmpty()) {
+			return new Invalid("usage: /team <id> lead @agent [repos a,b] [with @a,@b] [floor n]");
+		}
+		String name = null;
+		String lead = null;
+		List<String> members = null;
+		List<String> repos = null;
+		Integer floor = null;
+		for (int i = 1; i < args.size(); i++) {
+			String k = args.get(i).toLowerCase(Locale.ROOT);
+			if (k.equals("disband") || k.equals("remove") || k.equals("delete")) {
+				return new Team(id, null, null, null, null, null, true);
+			}
+			if (i + 1 >= args.size()) {
+				return new Invalid("/team " + id + " " + k + " needs a value");
+			}
+			String v = args.get(++i);
+			switch (k) {
+				case "lead" -> lead = agentId(v, s);
+				case "name", "called" -> name = v;
+				case "with", "members", "workers" -> members = agentIds(v, s);
+				case "repos", "repo" -> repos = List.of(v.split("\\s*,\\s*"));
+				case "floor" -> {
+					try {
+						floor = Integer.valueOf(v);
+					} catch (NumberFormatException e) {
+						return new Invalid("floor must be a number (0 = the top floor)");
+					}
+				}
+				default -> {
+					return new Invalid("/team: expected lead, with, repos, floor or disband, not \"" + k + "\"");
+				}
+			}
+		}
+		if (lead != null && lead.isEmpty()) {
+			return new Invalid("/team " + id + " lead <agent>: no agent by that name");
+		}
+		return new Team(id, name, lead, members, repos, floor, false);
+	}
+
+	/** "@Kit" / "kit" -> the agent id, or "" when nobody is called that. */
+	private static String agentId(String nameOrId, ForemanState s) {
+		String n = nameOrId.replace("@", "").strip();
+		for (var a : s.agents().values()) {
+			if (a.id().equalsIgnoreCase(n) || a.name().equalsIgnoreCase(n)) {
+				return a.id();
+			}
+		}
+		return "";
+	}
+
+	private static List<String> agentIds(String csv, ForemanState s) {
+		List<String> out = new ArrayList<>();
+		for (String part : csv.split("\\s*,\\s*")) {
+			String id = agentId(part, s);
+			if (!id.isEmpty()) {
+				out.add(id);
+			}
+		}
+		return out;
+	}
 
 	/**
 	 * {@code /caps} reports every repo; {@code /caps agentcraft full} grants it; {@code /caps
@@ -691,6 +774,10 @@ public final class ConsoleCommands {
 			case Permissions p -> p.mode() == null ? "cycle permissions" : "permissions: " + p.mode();
 			case Caps c -> c.caps() == null ? "show what agents may reach"
 				: (c.role() == null ? "" : c.role() + " in ") + repoName(c.repoId(), s) + ": " + c.caps();
+			case Team t -> t.teamId() == null ? "show the teams"
+				: t.disband() ? "disband " + t.teamId()
+				: (t.lead() != null ? t.teamId() + " under " + displayName(t.lead(), s) : "change " + t.teamId())
+					+ (t.repos() == null ? "" : " · " + String.join(", ", t.repos()));
 			case Artifacts a -> a.id() == null ? "open the artifacts" : "open artifact " + a.id();
 			case Notes n -> n.query() == null ? "open " + n.source() : "search " + n.source() + ": " + n.query();
 			case Dev dv -> "dev: " + dv.action();

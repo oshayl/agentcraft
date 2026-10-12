@@ -14,6 +14,7 @@ import dev.agentcraft.client.console.ConsoleCommands.Message;
 import dev.agentcraft.client.console.ConsoleCommands.RepoAdd;
 import dev.agentcraft.client.console.ConsoleCommands.Artifacts;
 import dev.agentcraft.client.console.ConsoleCommands.Caps;
+import dev.agentcraft.client.console.ConsoleCommands.Team;
 import dev.agentcraft.client.console.ConsoleCommands.Dev;
 import dev.agentcraft.client.console.ConsoleCommands.Notes;
 import dev.agentcraft.client.console.ConsoleCommands.Permissions;
@@ -59,6 +60,27 @@ public final class ConsoleActions {
 	/** What the console does with its input after Enter. */
 	public enum After {
 		CLEAR, KEEP, CLOSE
+	}
+
+	/**
+	 * The Foreman feeds every one of these lines too; this is the inline acknowledgement, so
+	 * they go on one console line separated by dots.
+	 */
+	private static String lines(Ack ack) {
+		if (ack.result() != null && ack.result().has("lines")) {
+			com.google.gson.JsonArray ls = ack.result().getAsJsonArray("lines");
+			StringBuilder b = new StringBuilder();
+			for (int i = 0; i < ls.size(); i++) {
+				if (i > 0) {
+					b.append(" \u00b7 ");
+				}
+				b.append(ls.get(i).getAsString());
+			}
+			if (b.length() > 0) {
+				return b.toString();
+			}
+		}
+		return "done " + UiBits.CHECK;
 	}
 
 	private static volatile @Nullable Feedback feedback;
@@ -239,23 +261,10 @@ public final class ConsoleActions {
 					? "permissions: auto \u00b7 prompts are allowed automatically; merges still need you"
 					: "permissions: ask \u00b7 every prompt comes to you " + UiBits.CHECK;
 			}, "switching\u2026");
-			case Caps c -> track(Foreman.setCaps(c.repoId(), c.role(), c.caps()), raw, restore, ack -> {
-				// the Foreman feeds the same lines; this is the inline acknowledgement
-				if (ack.result() != null && ack.result().has("lines")) {
-					com.google.gson.JsonArray ls = ack.result().getAsJsonArray("lines");
-					StringBuilder b = new StringBuilder();
-					for (int i = 0; i < ls.size(); i++) {
-						if (i > 0) {
-							b.append(" \u00b7 ");
-						}
-						b.append(ls.get(i).getAsString());
-					}
-					if (b.length() > 0) {
-						return b.toString();
-					}
-				}
-				return "done " + UiBits.CHECK;
-			}, c.caps() == null ? "checking\u2026" : "granting\u2026");
+			case Team t -> track(Foreman.setTeam(t.teamId(), t.name(), t.lead(), t.members(), t.repos(), t.floor(), t.disband()), raw, restore,
+				ConsoleActions::lines, t.teamId() == null ? "reading\u2026" : "setting up\u2026");
+			case Caps c -> track(Foreman.setCaps(c.repoId(), c.role(), c.caps()), raw, restore, ConsoleActions::lines,
+				c.caps() == null ? "checking\u2026" : "granting\u2026");
 			case RepoFix f -> track(Foreman.fixRepo(f.action(), f.repoId()), raw, restore, ack -> {
 				// the Foreman also feeds each line; this is the inline acknowledgement
 				if (ack.result() != null && ack.result().has("lines")) {

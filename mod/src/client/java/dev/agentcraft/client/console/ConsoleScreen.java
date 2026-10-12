@@ -637,7 +637,7 @@ public class ConsoleScreen extends Screen {
 	private static boolean sendsToForeman(Intent in) {
 		return in instanceof Goal || in instanceof ConsoleCommands.Message || in instanceof ConsoleCommands.Answer || in instanceof ConsoleCommands.RepoAdd
 			|| in instanceof ConsoleCommands.RepoFix || in instanceof ConsoleCommands.Permissions || in instanceof ConsoleCommands.AgentAction || in instanceof ConsoleCommands.TaskAction
-			|| in instanceof ConsoleCommands.Caps || in instanceof ConsoleCommands.Dev;
+			|| in instanceof ConsoleCommands.Caps || in instanceof ConsoleCommands.Team || in instanceof ConsoleCommands.Dev;
 	}
 
 	@Override
