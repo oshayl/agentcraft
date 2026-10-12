@@ -728,7 +728,7 @@ public class TaskScreen extends Screen {
 			return "";
 		}
 		List<String> shown = waiting.size() > 3 ? waiting.subList(0, 3) : waiting;
-		return String.join(", ", shown) + (waiting.size() > 3 ? " and " + (waiting.size() - 3) + " more" : "") + " finish";
+		return String.join(", ", shown) + (waiting.size() > 3 ? " and " + (waiting.size() - 3) + " more" : "") + " to finish";
 	}
 
 	private @Nullable String currentBlockedReason() {
