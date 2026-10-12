@@ -174,7 +174,11 @@ public class TaskScreen extends Screen {
 		h += depRows > 0 ? 12 + depRows * 11 + 4 : 0;
 		h += 12; // CI + branch line
 		boolean blocked = t != null && t.status() == TaskStatus.BLOCKED;
-		List<FormattedCharSequence> reason = blocked && t.blockedReason() != null ? clip(TextUtil.wrap(font, "Blocked: " + t.blockedReason(), inner), 2)
+		// Six lines, not two: a worker writes what it hit, what it already checked and what would
+		// clear it, and the part that matters is rarely in the first sentence. Two lines showed
+		// "inventory complete; Noira approved the org" and hid "Supabase rejects it, invoices are
+		// overdue" - so the card said Blocked and never said what by, and Retry looked broken.
+		List<FormattedCharSequence> reason = blocked && t.blockedReason() != null ? clip(TextUtil.wrap(font, "Blocked: " + t.blockedReason(), inner), 6)
 			: List.of();
 		h += reason.isEmpty() ? 0 : reason.size() * 10 + 4;
 		List<FormattedCharSequence> summary = t != null && t.summary() != null && !t.summary().isBlank() && t.status() == TaskStatus.DONE
