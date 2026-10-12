@@ -51,28 +51,62 @@ final class Amenities {
 				p.set(x, top, z, lit ? dev.agentcraft.block.ModBlocks.GLOW_PANEL.defaultBlockState() : WHITE);
 			}
 		}
-		// seating: two benches facing each other over a table, east of the tower
+		// Reception, laid out from the radius rather than from numbers that happened to fit.
+		// The seating used to start four blocks off the tower and run three wide, which put its
+		// far side exactly on the wall ring: a chair replaced the glass, and the anchor for
+		// whoever sat in it was inside the wall.
+		int inner = r - 1; // the last column that is floor rather than wall
 		int sx = cx + towerRadius + 2;
-		for (int dz = -2; dz <= 2; dz++) {
-			for (int dx = -1; dx <= 1; dx++) {
-				p.set(sx + dx, y, cz + dz, St.carpet(Math.abs(dz) == 2 ? DyeColor.BROWN : DyeColor.LIGHT_GRAY));
+		if (sx + 1 <= inner) {
+			for (int dz = -2; dz <= 2; dz++) {
+				for (int dx = -1; dx <= 1; dx++) {
+					p.set(sx + dx, y, cz + dz, St.carpet(Math.abs(dz) == 2 ? DyeColor.BROWN : DyeColor.LIGHT_GRAY));
+				}
+			}
+			p.set(sx, y, cz, St.slab(Blocks.DARK_OAK_SLAB, true));
+			p.set(sx, y + 1, cz, St.lantern(Blocks.LANTERN, false));
+			// benches down the long sides, facing each other across the table
+			for (int dx = -1; dx <= 1; dx += 2) {
+				seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, dx < 0 ? 3 : 4), sx + dx, y, cz - 2, Direction.SOUTH);
+				seat(p, a, AnchorNames.slot(AnchorNames.LOUNGE, dx < 0 ? 5 : 6), sx + dx, y, cz + 2, Direction.NORTH);
+			}
+			p.set(sx + 1, y, cz - 1, St.of(Blocks.POTTED_FERN));
+			p.set(sx + 1, y, cz + 1, St.of(Blocks.POTTED_FLOWERING_AZALEA));
+		}
+		// a desk facing whoever comes in, on the far side of the tower from the door
+		int dx0 = cx - towerRadius - 2;
+		if (dx0 - 1 >= cx - inner) {
+			for (int dz = -1; dz <= 1; dz++) {
+				p.set(dx0, y, cz + dz, St.slab(Blocks.DARK_OAK_SLAB, true));
+				p.set(dx0, y + 1, cz + dz, dz == 0 ? dev.agentcraft.block.ModBlocks.MONITOR.defaultBlockState()
+					.setValue(dev.agentcraft.block.FacingEntityBlock.FACING, Direction.EAST) : WHITE);
+			}
+			p.set(dx0 - 1, y, cz, St.stairs(Blocks.DARK_OAK_STAIRS, Direction.WEST, false));
+		}
+		// something green in the corners the walkway does not use
+		for (int sgnX = -1; sgnX <= 1; sgnX += 2) {
+			for (int sgnZ = -1; sgnZ <= 1; sgnZ += 2) {
+				int px = cx + sgnX * inner;
+				int pz = cz + sgnZ * inner;
+				if (p.isAir(px, y, pz) && !p.isAir(px, y - 1, pz)) {
+					p.set(px, y, pz, St.of((sgnX + sgnZ) == 0 ? Blocks.POTTED_AZALEA : Blocks.POTTED_FERN));
+				}
 			}
 		}
-		p.set(sx, y, cz, St.slab(Blocks.DARK_OAK_SLAB, true));
-		p.set(sx, y + 1, cz, St.lantern(Blocks.LANTERN, false));
-		for (int dx = -1; dx <= 1; dx += 2) {
-			p.set(sx + dx, y, cz - 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.NORTH, false));
-			p.set(sx + dx, y, cz + 2, St.stairs(Blocks.SPRUCE_STAIRS, Direction.SOUTH, false));
-		}
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 3), sx - 1 + 0.5, y, cz - 2 + 0.5, Direction.SOUTH.toYRot(), 0);
-		a.put(AnchorNames.slot(AnchorNames.LOUNGE, 4), sx + 1 + 0.5, y, cz + 2 + 0.5, Direction.NORTH.toYRot(), 0);
-		p.set(sx + 2, y, cz - 2, St.of(Blocks.POTTED_FERN));
-		p.set(sx + 2, y, cz + 2, St.of(Blocks.POTTED_FLOWERING_AZALEA));
 		// the way in, and where someone waiting is told to stand
-		for (int h = 0; h <= 1; h++) {
-			p.set(cx, y + h, cz + r, Blocks.AIR.defaultBlockState());
+		for (int dz = -1; dz <= 1; dz++) {
+			for (int h = 0; h <= 2; h++) {
+				p.set(cx + dz, y + h, cz + r, Blocks.AIR.defaultBlockState());
+			}
+			p.set(cx + dz, ground, cz + r, FLOOR);
 		}
 		a.put(AnchorNames.ENTRANCE, cx + 0.5, y, cz + r - 1.5, 180, 0);
+	}
+
+	/** A seat facing {@code look}: a stair seats you the way it is NOT facing, so it points back. */
+	private static void seat(Plan p, Anchors.Builder a, String anchor, int x, int y, int z, Direction look) {
+		p.set(x, y, z, St.stairs(Blocks.SPRUCE_STAIRS, look.getOpposite(), false));
+		a.put(anchor, x + 0.5, y, z + 0.5, look.toYRot(), 0);
 	}
 
 	/**

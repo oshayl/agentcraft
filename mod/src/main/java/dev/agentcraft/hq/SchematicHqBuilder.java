@@ -108,7 +108,10 @@ public final class SchematicHqBuilder implements HqBuilder {
 		int courseX = SITE_X + lit.sizeX / 2;
 		int courseZ = SITE_Z + lit.sizeZ / 2;
 		SchematicLandscape.shape(p, GROUND, new SchematicLandscape.Flat(SITE_X - 1, SITE_Z - 1, SITE_X + lit.sizeX, SITE_Z + lit.sizeZ),
-			new SchematicLandscape.Glade(courseX, courseZ, COURSE_INNER - 4, COURSE_OUTER + 4));
+			// The glade has to cover where the course actually ends up, not where it would be if
+			// nothing were in the way: it bulges out past the lobby now, and a platform planted
+			// in a wood is a platform inside a hedge.
+			new SchematicLandscape.Glade(courseX, courseZ, COURSE_INNER - 6, COURSE_OUTER + 12));
 		for (int x = 0; x < lit.sizeX; x++) {
 			for (int y = 0; y < lit.sizeY; y++) {
 				for (int z = 0; z < lit.sizeZ; z++) {
@@ -181,8 +184,20 @@ public final class SchematicHqBuilder implements HqBuilder {
 			// somewhere to be while the team works: a run through the grounds, out past the woods
 			int hcx = (SITE_X + b[0] + SITE_X + b[2]) / 2;
 			int hcz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
-			Parkour.build(p, a, hcx, hcz, GROUND, COURSE_INNER, COURSE_OUTER);
-			Parkour.approach(p, tx + 5, tz, hcx + COURSE_INNER, hcz, GROUND);
+			// Everything standing, so the run goes round it and not through it. The lobby is the
+			// part that catches people out: it is not on the house's footprint, it is a ring
+			// round a tower that sits off the end of it.
+			int lobbyR = Penthouse.TOWER_R + 3;
+			int[] built = {Math.min(SITE_X + b[0], tx - lobbyR) - 2, Math.min(SITE_Z + b[1], tz - lobbyR) - 2,
+				Math.max(SITE_X + b[2], tx + lobbyR) + 2, Math.max(SITE_Z + b[3], tz + lobbyR) + 2};
+			// the run starts out the way you leave the lobby, so the walk to it is a straight line
+			int doorX = tx;
+			int doorZ = tz + lobbyR;
+			int[] start = Parkour.build(p, a, hcx, hcz, GROUND, COURSE_INNER, COURSE_OUTER, built,
+				Math.atan2(doorZ - hcz, doorX - hcx));
+			if (start != null) {
+				Parkour.approach(p, doorX, doorZ + 1, start[0], start[1], GROUND);
+			}
 			fitted.addAll(a.names());
 			floor = new Floor(room.y(), (room.x0() + room.x1()) / 2, (room.z0() + room.z1()) / 2, room.x0(), room.z0(), room.x1(), room.z1());
 		}

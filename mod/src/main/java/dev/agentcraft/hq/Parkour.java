@@ -42,11 +42,23 @@ final class Parkour {
 	/**
 	 * Builds the course in a ring around ({@code cx}, {@code cz}), between {@code inner} and
 	 * {@code outer} blocks out, and writes the start and finish as anchors.
+	 *
+	 * <p>{@code keepOut} is everything already built, as {@code {x0, z0, x1, z1}}: no platform
+	 * lands in it and the ring bulges outward where it would. A ring at a fixed radius was fine
+	 * until the stair tower moved and took the lobby with it, and then the course ran through
+	 * the room people arrive in - a lime pad against the glass and lanterns on the carpet.
+	 *
+	 * <p>{@code from} is where the run should begin, in blocks from the centre: the course is
+	 * turned so its first platform is out that way, which is how the approach stays a short
+	 * straight walk from the door instead of a path round two corners of the building.
+	 *
+	 * @return the first platform, for the approach to be drawn to, or null when there is no room
 	 */
-	static void build(Plan p, Anchors.Builder a, int cx, int cz, int ground, int inner, int outer) {
-		List<Step> steps = route(cx, cz, ground, inner, outer);
+	static int @org.jspecify.annotations.Nullable [] build(Plan p, Anchors.Builder a, int cx, int cz, int ground, int inner, int outer,
+		int[] keepOut, double fromAngle) {
+		List<Step> steps = route(cx, cz, ground, inner, outer, keepOut, fromAngle);
 		if (steps.size() < 4) {
-			return;
+			return null;
 		}
 		// The wood this runs through is twelve blocks tall, so a course laid into it is a course
 		// inside a hedge. Every platform and every gap gets a corridor cut through the leaves
@@ -64,6 +76,12 @@ final class Parkour {
 		a.put("parkour_start", first.x() + 0.5, first.y() + 1, first.z() + 0.5, 0, 0);
 		a.put("parkour_finish", last.x() + 0.5, last.y() + 1, last.z() + 0.5, 0, 0);
 		a.put(dev.agentcraft.layout.AnchorNames.CAM_PREFIX + "parkour", first.x() + 0.5, first.y() + 9, first.z() + 14.0, 0, 28);
+		return new int[] {first.x(), first.z()};
+	}
+
+	/** Is this spot inside something already built (keepOut is {x0, z0, x1, z1})? */
+	private static boolean built(int[] keepOut, double x, double z) {
+		return x >= keepOut[0] && x <= keepOut[2] && z >= keepOut[1] && z <= keepOut[3];
 	}
 
 	/**
@@ -71,18 +89,27 @@ final class Parkour {
 	 * halfway and comes back down, sampled wherever it is a jump's distance on from the last
 	 * platform. The height is clamped to a block a step so every gap stays makeable.
 	 */
-	private static List<Step> route(int cx, int cz, int ground, int inner, int outer) {
+	private static List<Step> route(int cx, int cz, int ground, int inner, int outer, int[] keepOut, double fromAngle) {
 		List<Step> out = new ArrayList<>();
 		double lastX = Double.NaN;
 		double lastZ = 0;
 		int lastY = ground + 1;
 		// a little over one full turn, so the finish comes back near the start
 		for (double t = 0; t <= 1.08 && out.size() < LENGTH; t += 0.0015) {
-			double angle = t * 2 * Math.PI;
+			double angle = fromAngle + t * 2 * Math.PI;
 			double wander = 0.5 + 0.5 * Math.sin(angle * 3 + 0.7);
 			double radius = inner + (outer - inner) * wander;
 			double x = cx + Math.cos(angle) * radius;
 			double z = cz + Math.sin(angle) * radius;
+			// out past anything already built, rather than through it
+			for (int push = 0; push < 48 && built(keepOut, x, z); push++) {
+				radius += 1;
+				x = cx + Math.cos(angle) * radius;
+				z = cz + Math.sin(angle) * radius;
+			}
+			if (built(keepOut, x, z)) {
+				continue;
+			}
 			// A run of identical three-block jumps is a chore. The gap changes with the stretch:
 			// two blocks to breathe on, three for the standard sprint jump, and the odd four to
 			// make you commit - which is also the limit, flat, with no block to climb.
