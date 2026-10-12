@@ -51,7 +51,10 @@ public class TaskScreen extends Screen {
 	static final long CONFIRM_NANOS = 5_000_000_000L;
 	/** Extra height the reassign chips and the feedback line can add; the panel's top stays put when they appear. */
 	private static final int CHIPS_H = 24;
-	private static final int FEEDBACK_H = 14;
+	private static final int FEEDBACK_H = 34;
+	private boolean sending;
+	private long requestGeneration;
+	private int scrollOffset, maxScroll;
 	private final List<Btn> buttons = new ArrayList<>();
 	/** The assignee's newest log entry, cached by the monitors' per-agent log counter. */
 	private String latestAgent = "";
@@ -134,7 +137,14 @@ public class TaskScreen extends Screen {
 				i = k;
 			}
 		}
-		taskId = all.get(Math.floorMod(i + dir, all.size())).id();
+		openTask(all.get(Math.floorMod(i + dir, all.size())).id());
+	}
+
+	private void openTask(String id) {
+		taskId = id;
+		sending = false;
+		requestGeneration++;
+		scrollOffset = 0;
 		feedback = null;
 		retriedId = null;
 		confirmCancel = false;
@@ -174,8 +184,12 @@ public class TaskScreen extends Screen {
 		LogEntry now = onIt ? latest(fs0, who.id()) : null;
 		int assigneeH = assigned ? (now != null ? 34 : 22) : 12;
 		int h = pad.top() + 14 + 6 + title.size() * titleLine + 5 + assigneeH + 4 + (desc.isEmpty() ? 0 : desc.size() * 10 + 6);
-		int depRows = t == null ? 0 : Math.min(3, t.deps().size());
-		h += depRows > 0 ? 12 + depRows * 11 + 4 : 0;
+		List<String> deps = new ArrayList<>(t == null ? List.of() : t.deps());
+		// The actual blockers come first, even when a release gate has dozens of finished deps.
+		deps.sort((a, b) -> Boolean.compare(fs0 != null && fs0.task(a) != null && fs0.task(a).status() == TaskStatus.DONE,
+			fs0 != null && fs0.task(b) != null && fs0.task(b).status() == TaskStatus.DONE));
+		int depRows = Math.min(4, deps.size());
+		h += depRows > 0 ? 12 + depRows * 11 + 4 + (deps.size() > depRows ? 11 : 0) : 0;
 		h += 12; // CI + branch line
 		boolean blocked = t != null && t.status() == TaskStatus.BLOCKED;
 		// Six lines, not two: a worker writes what it hit, what it already checked and what would
@@ -194,11 +208,16 @@ public class TaskScreen extends Screen {
 		boolean live = Foreman.connected();
 		String note = feedbackLine(t, live);
 		h += 3 + 6 + 20 + 8 + 12 + pad.bottom();
-		int extra = (reassignOpen ? CHIPS_H : 0) + (note != null ? FEEDBACK_H : 0);
+		List<Agent> choices = assignmentChoices(t, fs0);
+		int chipsH = CHIPS_H * assignmentRows(choices, inner);
+		int extra = (reassignOpen ? chipsH : 0) + (note != null ? FEEDBACK_H : 0);
 		// centre as if the chips and the feedback line were showing, so opening them grows the panel downwards
 		px = (width - W) / 2;
-		py = Math.max(4, (height - h - CHIPS_H - FEEDBACK_H) / 2);
+		py = Math.max(4, (height - h - chipsH - FEEDBACK_H) / 2);
 		h += extra;
+		maxScroll = Math.max(0, py + h - height + 4);
+		scrollOffset = Math.min(scrollOffset, maxScroll);
+		py -= scrollOffset;
 		ph = h;
 		Panels.panel(g, px, py, W, h);
 		int x = px + pad.left();
@@ -280,7 +299,7 @@ public class TaskScreen extends Screen {
 			Panels.text(g, font, "Needs", x, y, ink);
 			y += 12;
 			for (int i = 0; i < depRows; i++) {
-				String d = t.deps().get(i);
+				String d = deps.get(i);
 				Task dt = s == null ? null : s.task(d);
 				String fam = dt == null ? "idle" : statusFamily(dt);
 				Panels.dot(g, fam, x + 2, y + 1, false);
@@ -289,10 +308,12 @@ public class TaskScreen extends Screen {
 				int stw = font.width(st);
 				Panels.text(g, font, TextUtil.ellipsize(font, label, inner - 14 - stw - 6), x + 12, y, ink);
 				Panels.text(g, font, st, x + inner - stw, y, muted);
+				buttons.add(new Btn("open:" + d, label, x, y - 1, inner, 11, false, dt != null, null));
 				y += 11;
 			}
 			if (t.deps().size() > depRows) {
-				Panels.text(g, font, "+" + (t.deps().size() - depRows) + " more", x + inner - 50, y - 11, muted);
+				Panels.text(g, font, "+" + (t.deps().size() - depRows) + " more prerequisites; click a row to inspect", x, y, muted);
+				y += 11;
 			}
 			y += 4;
 		}
@@ -341,27 +362,26 @@ public class TaskScreen extends Screen {
 		String primary = confirmCancel ? "cancel" : blocked || t.ci() == CiStatus.FAIL ? "retry" : t.status() == TaskStatus.TODO ? "prioritize" : "";
 		int gap = 4;
 		int bw = (inner - gap * 3) / 4;
-		button(g, "retry", "Retry", x, y, bw, 20, primary.equals("retry"), live && !cancelled && t.status() != TaskStatus.TODO, null, mouseX, mouseY,
+		button(g, "retry", "Retry", x, y, bw, 20, primary.equals("retry"), live && !sending && !cancelled && t.status() != TaskStatus.TODO, null, mouseX, mouseY,
 			false);
-		button(g, "prioritize", "Prioritize", x + (bw + gap), y, bw, 20, primary.equals("prioritize"), live && !cancelled && !done, null, mouseX,
+		button(g, "prioritize", "Prioritize", x + (bw + gap), y, bw, 20, primary.equals("prioritize"), live && !sending && !cancelled && !done, null, mouseX,
 			mouseY, false);
-		button(g, "reassign", "Reassign", x + 2 * (bw + gap), y, bw, 20, false, live && !cancelled && !done, null,
+		button(g, "reassign", "Reassign", x + 2 * (bw + gap), y, bw, 20, false, live && !sending && !cancelled && !done, null,
 			mouseX, mouseY, false);
 		button(g, "cancel", confirmCancel ? "Confirm" : "Cancel", x + 3 * (bw + gap), y, inner - 3 * (bw + gap), 20, primary.equals("cancel"),
-			live && !cancelled && !done, null, mouseX, mouseY, false);
+			live && !sending && !cancelled && !done, null, mouseX, mouseY, false);
 		y += 20;
 		if (reassignOpen && s != null) {
 			y += 5;
 			int cx = x;
-			for (Agent w : s.agents().values()) {
-				if (w.role() == AgentRole.LEAD || w.id().equals(t.assignee())) {
-					continue;
-				}
-				int cw = 8 + 4 + font.width(w.name()) + 10;
-				if (cx + cw > x + inner) {
-					break;
-				}
-				button(g, "to:" + w.id(), w.name(), cx, y, cw, 18, false, live, w.id(), mouseX, mouseY, false);
+			button(g, "auto", "Auto", cx, y, 48, 20, false, live && !sending, null, mouseX, mouseY, false);
+			cx += 51;
+			for (Agent w : choices) {
+				String label = assignmentLabel(w);
+				int cw = 22 + font.width(label);
+				if (cx + cw > x + inner) { cx = x; y += CHIPS_H; }
+				button(g, "to:" + w.id(), label, cx, y, cw, 18, false,
+					live && !sending && w.isActive() && !w.isPaused(), w.id(), mouseX, mouseY, false);
 				cx += cw + 3;
 			}
 			y += CHIPS_H - 5;
@@ -369,14 +389,53 @@ public class TaskScreen extends Screen {
 		if (note != null) {
 			y += 6;
 			boolean err = feedbackError && feedback != null && !confirmCancel;
-			Panels.text(g, font, TextUtil.ellipsize(font, note, inner), x, y, err ? error : confirmCancel ? ink : muted);
-			y += FEEDBACK_H - 6;
+			for (FormattedCharSequence line : clip(TextUtil.wrap(font, note, inner), 3)) {
+				g.text(font, line, x, y, err ? error : confirmCancel ? ink : muted, false);
+				y += 10;
+			}
 		}
 		y += 10;
 		// ---- key hints
 		int kx = x;
 		kx = keycap(g, "Esc", "close", kx, y);
-		keycap(g, "<  >", "browse", kx + 10, y);
+		int endX = keycap(g, "<  >", "browse", kx + 10, y);
+		if (maxScroll > 0) Panels.text(g, font, "Scroll for more", endX + 10, y, muted);
+	}
+
+	private List<Agent> assignmentChoices(@Nullable Task t, @Nullable ForemanState s) {
+		if (t == null || s == null) return List.of();
+		Agent owner = t.assignee() == null ? null : s.agent(t.assignee());
+		String team = t.teamId() != null ? t.teamId() : owner == null ? null : owner.teamId();
+		List<Agent> out = new ArrayList<>();
+		for (Agent a : s.agents().values()) {
+			if (a.role() == AgentRole.LEAD || a.id().equals(t.assignee())) continue;
+			if (team != null && !team.equals(a.teamId())) continue;
+			out.add(a);
+		}
+		return out;
+	}
+
+	private String assignmentLabel(Agent a) {
+		String state = !a.isActive() ? "off shift" : a.isPaused() ? "paused" : busy(a) ? "busy" : "ready";
+		return a.name() + " (" + state + ")";
+	}
+
+	private boolean busy(Agent a) {
+		// taskId can still name the last merged task after the worker becomes idle.
+		return switch (a.state()) {
+			case IDLE, DONE, ERROR, BLOCKED -> false;
+			default -> true;
+		};
+	}
+
+	private int assignmentRows(List<Agent> choices, int width) {
+		int rows = 1, used = 51; // Auto is always the first choice
+		for (Agent a : choices) {
+			int w = 22 + font.width(assignmentLabel(a));
+			if (used + w > width) { rows++; used = 0; }
+			used += w + 3;
+		}
+		return rows;
 	}
 
 	/** The assignee's newest log entry (the monitors' log counter says when to fetch it again). */
@@ -435,7 +494,16 @@ public class TaskScreen extends Screen {
 		if (feedback != null) {
 			return feedback;
 		}
-		return live ? null : "Foreman offline: actions are disabled";
+		if (!live) return "Foreman offline: actions are disabled";
+		String waiting = unmetDeps();
+		if (!waiting.isEmpty()) return "Waiting for " + waiting + ". Prioritize also raises these prerequisites; click a row to inspect.";
+		if (t.status() == TaskStatus.TODO) {
+			Agent a = Foreman.state() == null || t.assignee() == null ? null : Foreman.state().agent(t.assignee());
+			if (a != null && (!a.isActive() || a.isPaused())) return a.name() + " is paused or off shift. Choose Reassign > Auto or an available teammate.";
+			if (a != null && busy(a) && a.taskId() != null && !a.taskId().equals(t.id())) return "Queued; " + a.name() + " is on " + a.taskId() + ". Reassign > Auto allows another teammate to pick it up.";
+			return "Ready; waiting for a worker slot on this team.";
+		}
+		return null;
 	}
 
 	private int keycap(GuiGraphicsExtractor g, String key, String verb, int x, int y) {
@@ -494,6 +562,13 @@ public class TaskScreen extends Screen {
 	}
 
 	@Override
+	public boolean mouseScrolled(double mouseX, double mouseY, double horizontal, double vertical) {
+		if (maxScroll <= 0) return super.mouseScrolled(mouseX, mouseY, horizontal, vertical);
+		scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset - (int) Math.round(vertical * 24)));
+		return true;
+	}
+
+	@Override
 	public boolean keyPressed(KeyEvent event) {
 		if (event.key() == InputConstants.KEY_LEFT) {
 			browse(-1);
@@ -526,9 +601,11 @@ public class TaskScreen extends Screen {
 
 	/** Why a button is not taking clicks, in the words of whatever turned it off. */
 	private String whyOff(Btn b) {
+		if (sending) return "Waiting for Foreman to acknowledge the action";
 		if (!Foreman.connected()) {
 			return "Foreman offline: " + b.label() + " can't be sent yet";
 		}
+		if (b.agent() != null) return nameOf(b.agent()) + " is paused or off shift; resume them from their agent card";
 		Task t = task();
 		if (t == null) {
 			return b.label() + " is unavailable";
@@ -552,12 +629,19 @@ public class TaskScreen extends Screen {
 	}
 
 	private void press(Btn b) {
+		if (!b.enabled()) { feedback = whyOff(b); feedbackError = true; return; }
+		if (b.id().startsWith("open:")) { openTask(b.id().substring(5)); return; }
+		if (sending && !b.id().equals("prev") && !b.id().equals("next")) return;
 		switch (b.id()) {
 			case "prev" -> browse(-1);
 			case "next" -> browse(1);
 			case "reassign" -> {
 				reassignOpen = !reassignOpen;
 				confirmCancel = false;
+			}
+			case "auto" -> {
+				send("reassign", "auto");
+				reassignOpen = false;
 			}
 			case "cancel" -> {
 				if (!confirmCancel || System.nanoTime() > confirmUntil) {
@@ -590,9 +674,13 @@ public class TaskScreen extends Screen {
 
 	private void send(String action, @Nullable String arg) {
 		String id = taskId;
+		long generation = ++requestGeneration;
+		sending = true;
 		feedback = "Sending " + action + "...";
 		feedbackError = false;
 		Foreman.taskAction(id, action, arg).whenComplete((ack, err) -> {
+			if (!id.equals(taskId) || generation != requestGeneration) return; // an old card/request must not overwrite this one
+			sending = false;
 			if (err != null) {
 				feedback = "Not sent: " + (err.getMessage() == null ? err.toString() : err.getMessage());
 				feedbackError = true;
@@ -607,11 +695,12 @@ public class TaskScreen extends Screen {
 						// are unmet will not run however high it is, and saying "moved to the
 						// top" while nothing happens is how a working button looks broken.
 						String waiting = unmetDeps();
-						yield waiting.isEmpty() ? "Moved to the top of the queue"
-							: "Top of the queue - but it still cannot start until " + waiting;
+						yield waiting.isEmpty() ? "Task and unfinished prerequisites prioritized"
+							: "Task and prerequisites prioritized. Waiting for " + waiting;
 					}
 					case "cancel" -> "Cancelled";
-					default -> "Reassigned to " + (arg == null ? "?" : nameOf(arg));
+					default -> ("auto".equals(arg) ? "Queued for the next available teammate" : "Assigned to " + (arg == null ? "?" : nameOf(arg)))
+						+ (unmetDeps().isEmpty() ? "" : "; waiting for " + unmetDeps());
 				};
 				feedbackError = false;
 			}

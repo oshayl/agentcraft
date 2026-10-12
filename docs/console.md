@@ -43,6 +43,24 @@ and worktrees; repeated Tab cycles, Up/Down move in the popup. Up/Down otherwise
 (kept in `<game dir>/agentcraft/console-history.txt`). Shift+Enter adds a line; a multi-line
 paste grows the bar (up to 6 lines, then it scrolls).
 
+## Task wall actions
+
+Prioritize raises the task and its unfinished prerequisites. Ready tasks are ordered by
+priority across all goals on the owning team. It does not bypass dependencies, user questions,
+permissions or reviews. Open the task's prerequisite rows to inspect what is holding it up;
+unfinished prerequisites appear first.
+
+Reassign offers workers on the same team and shows their availability. Selecting a worker pins
+the task to that worker; if they are busy, the task waits for them. **Auto** releases that pin
+and chooses the next available teammate (`/task t74 reassign auto` also works). A planner's
+assignment is a preference for new work: another available teammate can take it when the
+preferred worker is busy. Work that already has a worktree stays with its owner until an
+explicit handoff. Paused or off-shift workers must be resumed from their agent card.
+
+Action acknowledgements and errors wrap below the buttons. Long panels scroll, so assignment
+choices remain reachable at smaller window sizes. The panel ignores repeat actions while an
+acknowledgement is pending; late replies cannot overwrite feedback on another task.
+
 ## Decision screen
 
 One decision at a time, in queue order: permission prompts first (an agent is blocked mid

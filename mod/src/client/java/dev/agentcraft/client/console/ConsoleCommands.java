@@ -610,7 +610,7 @@ public final class ConsoleCommands {
 				return new Invalid("reassign " + tid + " to whom? /task " + tid + " reassign @agent");
 			}
 			String bare = args.get(2).startsWith("@") ? args.get(2).substring(1) : args.get(2);
-			arg = resolveAgent(bare, s, false);
+			arg = bare.equalsIgnoreCase("auto") ? "auto" : resolveAgent(bare, s, false);
 			if (arg == null) {
 				return new Invalid("no agent named @" + bare + agentListSuffix(s));
 			}

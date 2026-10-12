@@ -26,6 +26,24 @@ describe('TaskGraph', () => {
     expect(() => fm.tasks.create({ title: '   ', createdBy: 'marlow' })).toThrow(/empty/);
   });
 
+  it('raises unfinished prerequisites once, without reviving blocked or cancelled work', () => {
+    const { fm } = setup();
+    const leaf = fm.tasks.create({ title: 'leaf', priority: 20, createdBy: 'marlow' });
+    const blocked = fm.tasks.create({ title: 'blocked', deps: [leaf.id], createdBy: 'marlow' });
+    fm.tasks.setStatus(blocked.id, 'blocked', { reason: 'needs user answer' });
+    const cancelled = fm.tasks.create({ title: 'cancelled', createdBy: 'marlow' });
+    fm.tasks.setStatus(cancelled.id, 'cancelled');
+    const done = fm.tasks.create({ title: 'done', createdBy: 'marlow' });
+    fm.tasks.setStatus(done.id, 'done');
+    const target = fm.tasks.create({ title: 'target', deps: [blocked.id, leaf.id, cancelled.id, done.id], createdBy: 'marlow' });
+    expect(fm.tasks.prioritize(target.id, 10)).toEqual([target.id, blocked.id]);
+    expect(leaf.priority).toBe(20);
+    expect(blocked).toMatchObject({ status: 'blocked', blockedReason: 'needs user answer', priority: 10 });
+    expect(cancelled).toMatchObject({ status: 'cancelled', priority: 0 });
+    expect(done).toMatchObject({ status: 'done', priority: 0 });
+    expect(fm.tasks.ready().map((t) => t.id)).not.toContain(target.id);
+  });
+
   it('rejects self-deps and cycles', () => {
     const { fm } = setup();
     const a = fm.tasks.create({ title: 'A', createdBy: 'marlow' });

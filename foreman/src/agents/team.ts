@@ -262,6 +262,8 @@ export class TeamBackend implements Backend {
   private running = new Map<string, Running>();
   private pausedJobs = new Map<string, Job>();
   private tickTimer: NodeJS.Timeout | undefined;
+  private scheduling = false;
+  private scheduleAgain = false;
   private authFailed = false;
   private stopping = false;
   private waitingUser = new Set<string>();
@@ -750,6 +752,18 @@ export class TeamBackend implements Backend {
   }
 
   private async schedule(): Promise<void> {
+    // Worktree creation awaits git. A task upsert during that await must not start a second
+    // pass which gives the same task (or the same worker) another worktree.
+    if (this.scheduling) { this.scheduleAgain = true; return; }
+    this.scheduling = true;
+    try { await this.scheduleReady(); }
+    finally {
+      this.scheduling = false;
+      if (this.scheduleAgain) { this.scheduleAgain = false; this.tick(); }
+    }
+  }
+
+  private async scheduleReady(): Promise<void> {
     if (this.authFailed || this.stopping) return;
     // Ready work gathered per team before anything starts, for two reasons: the fair share has
     // to know which teams are waiting, and the teams are then taken a task at a time in turn
@@ -761,6 +775,8 @@ export class TeamBackend implements Backend {
       for (const t of this.fm.tasks.ready(goal.id)) list.push({ goal, task: t });
       if (list.length) queued.set(teamId, list);
     }
+    // Priority spans a team's goals; insertion order of goals must not outrank a user click.
+    for (const list of queued.values()) list.sort((a, b) => b.task.priority - a.task.priority || a.task.createdAt - b.task.createdAt);
     const waiting = new Set(queued.keys());
     for (let round = 0; queued.size; round++) {
       for (const [teamId, list] of [...queued]) {
@@ -780,13 +796,15 @@ export class TeamBackend implements Backend {
           // intended worker can never come free for it and the task waits for ever without
           // saying so. Hand it to the team that owns the repository and say what happened.
           this.fm.bus.feed('task', `${t.id} was assigned to ${this.fm.nameOf(t.assignee)} (${this.fm.teamOf(t.assignee).name}) but its repo belongs to ${this.fm.teams.get(teamId)?.name ?? teamId}; reassigning`, { agentId: 'user' });
-          this.fm.tasks.update(t.id, { assignee: null });
+          this.fm.tasks.update(t.id, { assignee: null, assigneePinned: false });
           t.assignee = undefined;
         }
-        if (t.assignee && this.team.includes(t.assignee) && !this.isStopped(t.assignee)) {
-          if (!this.isFree(t.assignee, teamId)) continue; // wait for the intended worker
+        if (t.assignee && this.isFree(t.assignee, teamId)) {
           w = t.assignee;
         } else {
+          // A planner's assignment is a preference for work that has not started. A user pin
+          // and an existing worktree are ownership: neither is silently taken away.
+          if (t.assignee && (t.assigneePinned || (t.worktree && !this.isStopped(t.assignee)))) continue;
           w = this.fm.teams.get(teamId)?.members.find((x) => this.isFree(x, teamId));
         }
         if (!w) continue;
@@ -828,6 +846,13 @@ export class TeamBackend implements Backend {
     // a pull request task starts from the contributor's commits (fetched at goal intake)
     if (!startPoint && t.startBranch) startPoint = t.startBranch;
     const wt = await this.fm.repos.createWorktree(t.repoId!, agentId, t, startPoint ? { startPoint } : {});
+    // A click can cancel/reassign the task while git is creating its worktree. Honour the
+    // new intent before starting a turn; retain the prepared worktree for later resumption.
+    if (this.stopping || goal.status !== 'active' || t.status !== 'todo' || t.assignee !== agentId
+        || !this.fm.tasks.depsSatisfied(t) || !this.isFree(agentId, this.teamFor({ goalId: goal.id }))) {
+      this.tick();
+      return;
+    }
     this.fm.tasks.update(t.id, { branch: wt.branch, worktree: wt.id });
     this.fm.tasks.setStatus(t.id, 'doing');
     this.fm.setAgent(agentId, { taskId: t.id, repoId: t.repoId!, worktree: wt.id, state: 'thinking', station: 'desk', activity: `starting ${t.id}` });
@@ -1617,7 +1642,7 @@ export class TeamBackend implements Backend {
           // back on the board, but held until the agent's turn is really over and its work is committed;
           // the next worker then continues from this branch
           this.fm.tasks.setStatus(t.id, 'todo', { force: true });
-          this.fm.tasks.update(t.id, { assignee: null });
+          this.fm.tasks.update(t.id, { assignee: null, assigneePinned: false });
           this.fm.bus.feed('task', `${t.id} is back on the board (${name} was stopped)`, { agentId: 'user' });
           this.handOff(t.id, agentId, `${name} was stopped`);
         }

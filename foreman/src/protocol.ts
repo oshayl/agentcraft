@@ -123,6 +123,7 @@ export const Task = z.object({
   description: z.string().optional(),
   status: TaskStatus,
   assignee: Id.optional().describe('agent id'),
+  assigneePinned: z.boolean().optional().describe('explicit user assignment; wait for this worker instead of another available team member'),
   deps: z.array(Id).describe('task ids that must be done before this one can start'),
   repoId: Id.optional(),
   teamId: Id.optional().describe('the team that owns this task, from its repo'),
@@ -431,7 +432,7 @@ export const TaskActionMsg = z.object({
     .string()
     .optional()
     .describe(
-      'reassign: agent id; prioritize: integer priority (default: bump to top); unblock: what the worker was waiting to be told, which reaches it as a message and puts the task back on the board',
+      'reassign: agent id or auto (next available worker on the owning team); prioritize: integer priority (default: bump to top); unblock: what the worker was waiting to be told, which reaches it as a message and puts the task back on the board',
     ),
 });
 export const AgentActionMsg = z.object({

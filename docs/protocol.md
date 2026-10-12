@@ -73,6 +73,7 @@ Exact option labels: merge decisions use `Merge`, `Request changes`, `Reject`; p
 | `description` | string | no |  |
 | `status` | [TaskStatus](#taskstatus) | yes | Task Wall column. `cancelled` tasks are kept for history but should not be shown on the wall. |
 | `assignee` | string | no | agent id |
+| `assigneePinned` | boolean | no | explicit user assignment; wait for this worker instead of another available team member |
 | `deps` | string[] | yes | task ids that must be done before this one can start |
 | `repoId` | string | no |  |
 | `teamId` | string | no | the team that owns this task, from its repo |
@@ -1044,7 +1045,7 @@ Steer a task from the Task Wall.
 | `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
 | `taskId` | string | yes |  |
 | `action` | `reassign` \| `cancel` \| `retry` \| `prioritize` \| `unblock` | yes |  |
-| `arg` | string | no | reassign: agent id; prioritize: integer priority (default: bump to top); unblock: what the worker was waiting to be told, which reaches it as a message and puts the task back on the board |
+| `arg` | string | no | reassign: agent id or auto (next available worker on the owning team); prioritize: integer priority (default: bump to top); unblock: what the worker was waiting to be told, which reaches it as a message and puts the task back on the board |
 
 ```json
 {

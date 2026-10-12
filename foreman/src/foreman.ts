@@ -1017,8 +1017,8 @@ export class Foreman {
       case 'prioritize': {
         const top = Math.max(0, ...this.tasks.list().map((x) => x.priority));
         const p = arg !== undefined && arg !== '' && Number.isFinite(Number(arg)) ? Math.trunc(Number(arg)) : top + 1;
-        this.tasks.update(t.id, { priority: p });
-        this.bus.feed('task', `Task ${t.id} priority -> ${p}`, { agentId: 'user' });
+        const raised = this.tasks.prioritize(t.id, p);
+        this.bus.feed('task', `Task ${t.id} priority -> ${p}${raised.length > 1 ? `; also prioritized prerequisites ${raised.slice(1).join(', ')}` : ''}`, { agentId: 'user' });
         break;
       }
       case 'unblock': {
@@ -1036,11 +1036,21 @@ export class Foreman {
       }
       case 'reassign': {
         if (!arg) throw new ClientError('reassign needs an agent id');
+        if (arg === 'auto') {
+          this.tasks.update(t.id, { assignee: null, assigneePinned: false });
+          if (t.status === 'doing') this.tasks.setStatus(t.id, 'todo', { force: true });
+          this.bus.feed('task', `Task ${t.id} queued for the next available worker on its team`, { agentId: 'user' });
+          break;
+        }
         const id = this.resolveAgentId(arg);
         if (!id) throw new ClientError(`no agent named "${arg}"`);
         if (this.agent(id)?.role === 'lead') throw new ClientError('tasks are assigned to workers, not the lead');
-        this.tasks.update(t.id, { assignee: id });
-        if (t.status === 'doing') this.tasks.setStatus(t.id, 'todo', { force: true });
+        const goal = t.goalId ? this.goal(t.goalId) : undefined;
+        const team = this.teams.get(goal?.teamId ?? t.teamId ?? this.teamForRepo(t.repoId ?? goal?.repoId).id)!;
+        if (!team.members.includes(id)) throw new ClientError(`${this.nameOf(id)} is not on ${team.name}; choose a worker on that team`);
+        const changedOwner = t.assignee !== id;
+        this.tasks.update(t.id, { assignee: id, assigneePinned: true });
+        if (changedOwner && t.status === 'doing') this.tasks.setStatus(t.id, 'todo', { force: true });
         this.bus.feed('task', `Task ${t.id} reassigned to ${this.nameOf(id)}`, { agentId: 'user' });
         break;
       }

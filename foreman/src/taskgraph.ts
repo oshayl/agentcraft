@@ -34,6 +34,7 @@ export interface TaskPatch {
   description?: string;
   deps?: string[];
   assignee?: string | null;
+  assigneePinned?: boolean;
   priority?: number;
   branch?: string;
   worktree?: string;
@@ -124,6 +125,7 @@ export class TaskGraph {
       if (patch.assignee === null) delete t.assignee;
       else t.assignee = patch.assignee;
     }
+    if (patch.assigneePinned !== undefined) t.assigneePinned = patch.assigneePinned;
     if (patch.priority !== undefined) t.priority = patch.priority;
     if (patch.branch !== undefined) t.branch = patch.branch;
     if (patch.worktree !== undefined) t.worktree = patch.worktree;
@@ -184,6 +186,25 @@ export class TaskGraph {
     return this.tasks
       .filter((t) => t.status === 'todo' && (!goalId || t.goalId === goalId) && this.depsSatisfied(t))
       .sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt || a.id.localeCompare(b.id, 'en', { numeric: true }));
+  }
+
+  /** Prioritizing an outcome also advances the unfinished prerequisites that can deliver it. */
+  prioritize(id: string, priority: number): string[] {
+    const changed: string[] = [];
+    const seen = new Set<string>();
+    const visit = (taskId: string, root = false): void => {
+      if (seen.has(taskId)) return;
+      seen.add(taskId);
+      const t = this.require(taskId);
+      if (!root && (t.status === 'done' || t.status === 'cancelled')) return;
+      if (root || t.priority < priority) {
+        this.update(t.id, { priority });
+        changed.push(t.id);
+      }
+      for (const dep of t.deps) visit(dep);
+    };
+    visit(id, true);
+    return changed;
   }
 
   dependents(id: string): Task[] {
