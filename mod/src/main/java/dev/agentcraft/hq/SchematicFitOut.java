@@ -300,30 +300,37 @@ final class SchematicFitOut {
 				continue; // the spine comes out here; leave it clear
 			}
 			for (int x = x0 + 1; x <= x1 - 1; x++) {
-				if ((x - x0) % 4 == 0 || !p.isAir(x, y, zd) || !p.isAir(x, y + 1, zd)) {
+				// every third column, not three in every four: desks shoulder to shoulder mean an
+				// agent steps into one by standing on the next, which is what the HQ check calls
+				// a step-in cell on furniture
+				if ((x - x0) % 3 != 1 || !p.isAir(x, y, zd) || !p.isAir(x, y + 1, zd)) {
 					continue;
 				}
 				if (p.isAir(x, y - 1, zd)) {
 					continue;
 				}
+				// The chair goes in the cell in front, and a bay whose front cell has no floor
+				// is a bay nobody can sit at. It used to get the desk and the anchor anyway, so
+				// an agent was sent to a chair that was never placed, over a hole.
 				int zs = zd - look.getStepZ();
+				boolean seatable = p.isAir(x, y, zs) && !p.isAir(x, y - 1, zs);
 				p.set(x, y, zd, St.slab(Blocks.DARK_OAK_SLAB, true));
 				p.set(x, y + 1, zd, ModBlocks.MONITOR.defaultBlockState().setValue(FacingEntityBlock.FACING, look.getOpposite()));
 				// One screen each, and the first of them the team board. An unbound monitor falls
 				// back to the activity feed, so a floor of them was six copies of the same feed -
 				// which reads as "every screen is showing Wren" on a day Wren is the one working.
-				// the agents who work on this floor get a desk each, with their own screen on it
-				// and the anchor that sends them to it; the first bay is the team board
-				String who = next == 0 || seats.isEmpty() ? "feed" : next - 1 < seats.size() ? seats.get(next - 1) : "feed";
-				p.bind(x, y + 1, zd, who);
-				if (!who.equals("feed")) {
+				String who = "feed";
+				if (seatable && next > 0 && next - 1 < seats.size()) {
+					who = seats.get(next - 1);
+					p.set(x, y, zs, St.stairs(Blocks.DARK_OAK_STAIRS, look.getOpposite(), false));
 					a.put(AnchorNames.desk(who), x + 0.5, y, zs + 0.5, look.toYRot(), 0);
 					a.put(AnchorNames.monitor(who), x + 0.5, y + 1.5, zd + 0.5 - look.getStepZ() * 0.25, look.getOpposite().toYRot(), 0);
-				}
-				next++;
-				// the seat is the cell in front, so an agent sits looking at the screen
-				if (p.isAir(x, y, zs) && !p.isAir(x, y - 1, zs)) {
+				} else if (seatable) {
 					p.set(x, y, zs, St.stairs(Blocks.DARK_OAK_STAIRS, look.getOpposite(), false));
+				}
+				p.bind(x, y + 1, zd, who);
+				if (seatable) {
+					next++;
 				}
 			}
 		}
