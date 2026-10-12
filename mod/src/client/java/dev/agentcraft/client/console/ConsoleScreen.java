@@ -316,7 +316,16 @@ public class ConsoleScreen extends Screen {
 		if (pendingGoal != null) {
 			List<Repo> choices = pendingGoal.choices();
 			Repo r = choices.get(Math.max(0, Math.min(repoSel, choices.size() - 1)));
-			in = new Goal(pendingGoal.text(), r.id(), List.of());
+			// The field stays editable behind the chooser, and this used to take the remembered
+			// text no matter what was in it - so anything typed while the chooser was up went
+			// nowhere, a command typed over the goal most of all: it parsed, it never ran.
+			// Whatever is in the field now is what the Enter meant.
+			if (in instanceof Goal edited) {
+				in = new Goal(edited.text(), r.id(), List.of());
+			} else if (in instanceof ConsoleCommands.Empty) {
+				in = new Goal(pendingGoal.text(), r.id(), List.of());
+			}
+			// anything else is a command typed over the goal: it runs, and the chooser goes
 			pendingGoal = null;
 		} else if (in instanceof Goal g && !g.choices().isEmpty()) {
 			pendingGoal = g;
