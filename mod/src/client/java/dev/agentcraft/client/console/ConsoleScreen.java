@@ -55,6 +55,8 @@ public class ConsoleScreen extends Screen {
 	private int historyIndex = -1;
 	private String draft = "";
 	private int compSel;
+	/** First completion drawn: the six-row window follows {@link #compSel} through a longer list. */
+	private int popupTop;
 	private boolean popupHidden;
 	private String lastValue = "";
 	private @Nullable Goal pendingGoal;
@@ -191,6 +193,7 @@ public class ConsoleScreen extends Screen {
 		input.set(v);
 		popupHidden = false;
 		compSel = 0;
+		popupTop = 0;
 	}
 
 	public List<Completion> completions() {
@@ -217,6 +220,7 @@ public class ConsoleScreen extends Screen {
 		if (!v.equals(lastValue)) {
 			lastValue = v;
 			compSel = 0;
+			popupTop = 0;
 			popupHidden = false;
 			if (pendingGoal != null) {
 				pendingGoal = null;
@@ -237,6 +241,7 @@ public class ConsoleScreen extends Screen {
 		}
 		if (compSel >= completions.size()) {
 			compSel = 0;
+			popupTop = 0;
 		}
 	}
 
@@ -297,6 +302,7 @@ public class ConsoleScreen extends Screen {
 			intentCursor = input.cursor();
 		}
 		compSel = 0;
+		popupTop = 0;
 		popupHidden = true;
 	}
 
@@ -507,7 +513,7 @@ public class ConsoleScreen extends Screen {
 		if (popupVisible() && mx >= popupX && mx < popupX + popupW && my >= popupY) {
 			int i = (int) ((my - popupY - 5) / popupRowH);
 			if (i >= 0 && i < popupCount) {
-				compSel = i;
+				compSel = popupTop + i;
 				applyCompletion();
 				return true;
 			}
@@ -566,6 +572,14 @@ public class ConsoleScreen extends Screen {
 
 	@Override
 	public boolean mouseScrolled(double x, double y, double scrollX, double scrollY) {
+		// over the completions, the wheel moves the completions; it used to scroll the feed
+		// behind them, which looked like the popup ignoring the mouse
+		if (popupVisible() && x >= popupX && x < popupX + popupW && y >= popupY) {
+			int n = Math.min(MAX_POPUP, completions.size());
+			popupTop = Math.max(0, Math.min(popupTop + (scrollY > 0 ? -1 : 1), completions.size() - n));
+			compSel = Math.max(popupTop, Math.min(compSel, popupTop + n - 1));
+			return true;
+		}
 		scroll.scrollBy(scrollY > 0 ? -3 : 3);
 		return true;
 	}
@@ -838,23 +852,44 @@ public class ConsoleScreen extends Screen {
 	private int drawRepoChooser(GuiGraphicsExtractor g, int bottom) {
 		Goal pg = pendingGoal;
 		Kit.Padding p = Kit.padding("panel_paper");
-		int h = p.top() + 12 + 16 + p.bottom() - 2;
-		int y = bottom - h;
 		int w = Math.max(panelW, Math.min(fieldW, 300));
+		int inner = w - p.left() - p.right();
+		// The chips used to stop at the first one that did not fit the line, while the hint went
+		// on offering "1-5": two repos you could pick by number and never see. They wrap now, and
+		// the panel grows to hold however many rows that takes.
+		List<String> labels = new ArrayList<>();
+		for (int i = 0; i < pg.choices().size(); i++) {
+			labels.add(TextUtil.ellipsize(font, (i + 1) + "  " + pg.choices().get(i).name(), inner - 12));
+		}
+		List<Integer> rowOf = new ArrayList<>();
+		int rows = 1;
+		int used = 0;
+		for (String label : labels) {
+			int pw = font.width(label) + 12;
+			if (used > 0 && used + pw > inner) {
+				rows++;
+				used = 0;
+			}
+			rowOf.add(rows - 1);
+			used += pw + 4;
+		}
+		int h = p.top() + 12 + rows * 16 + p.bottom() - 2;
+		int y = bottom - h;
 		Panels.panel(g, fieldX, y, w, h);
 		int x = fieldX + p.left();
 		g.text(font, "Which repo is this goal for?", x, y + p.top(), UiBits.ink(), false);
 		String hint = "Enter send · 1-" + pg.choices().size() + " pick · Esc back";
 		g.text(font, hint, fieldX + w - p.right() - font.width(hint), y + p.top(), UiBits.muted(), false);
 		int cx = x;
-		int cy = y + p.top() + 13;
-		for (int i = 0; i < pg.choices().size(); i++) {
-			Repo r = pg.choices().get(i);
-			String label = (i + 1) + "  " + r.name();
+		int row = 0;
+		for (int i = 0; i < labels.size(); i++) {
+			String label = labels.get(i);
 			int pw = font.width(label) + 12;
-			if (cx + pw > fieldX + w - p.right()) {
-				break;
+			if (rowOf.get(i) != row) {
+				row = rowOf.get(i);
+				cx = x;
 			}
+			int cy = y + p.top() + 13 + row * 16;
 			boolean sel = i == repoSel;
 			Panels.sprite(g, sel ? Kit.button(true, "normal") : Kit.PILL, cx, cy - 1, pw, sel ? 13 : 11);
 			g.text(font, label, cx + 6, cy + 1, sel ? UiBits.panelHi() : UiBits.ink(), false);
@@ -867,11 +902,20 @@ public class ConsoleScreen extends Screen {
 		int n = Math.min(MAX_POPUP, completions.size());
 		popupCount = n;
 		popupRowH = 11;
+		// The list shows six rows but the arrows walk the whole set, so the window follows the
+		// selection. It used to draw the first six always: a seventh match could be selected,
+		// and typed in by Tab, while the highlight sat nowhere the eye could find it.
+		popupTop = Math.max(0, Math.min(popupTop, completions.size() - n));
+		if (compSel < popupTop) {
+			popupTop = compSel;
+		} else if (compSel >= popupTop + n) {
+			popupTop = compSel - n + 1;
+		}
 		Kit.Padding p = Kit.padding("tooltip");
 		int maxLabel = 0;
 		int maxDetail = 0;
 		for (int i = 0; i < n; i++) {
-			Completion c = completions.get(i);
+			Completion c = completions.get(popupTop + i);
 			maxLabel = Math.max(maxLabel, font.width(c.label()));
 			if (c.detail() != null) {
 				maxDetail = Math.max(maxDetail, Math.min(170, font.width(c.detail())));
@@ -895,8 +939,8 @@ public class ConsoleScreen extends Screen {
 		Panels.sprite(g, Kit.PANEL_PAPER, x, y, w, h);
 		int ry = y + p.top();
 		for (int i = 0; i < n; i++) {
-			Completion c = completions.get(i);
-			boolean sel = i == compSel;
+			Completion c = completions.get(popupTop + i);
+			boolean sel = popupTop + i == compSel;
 			if (sel) {
 				g.fill(x + 3, ry - 1, x + w - 3, ry + popupRowH - 1, UiStyle.withAlpha(UiStyle.CLAY, 46));
 				g.fill(x + 3, ry - 1, x + 5, ry + popupRowH - 1, UiStyle.CLAY);
@@ -922,7 +966,7 @@ public class ConsoleScreen extends Screen {
 		}
 		UiBits.hints(g, font, x + p.left(), ry + 2, false, "Tab", tabHint);
 		if (n > 1) {
-			String nav = "↑↓";
+			String nav = completions.size() > n ? (compSel + 1) + "/" + completions.size() + " ↑↓" : "↑↓";
 			g.text(font, nav, x + w - p.right() - font.width(nav) - 2, ry + 4, UiBits.muted(), false);
 		}
 	}
