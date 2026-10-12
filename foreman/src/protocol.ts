@@ -501,6 +501,12 @@ export const CapsSetMsg = z.object({
     ),
 });
 
+export const GoalActionMsg = z.object({
+  ...envelope('goal.action'),
+  action: z.enum(['remove', 'clear']).describe("'remove' one goal; 'clear' every goal that is finished with (done, cancelled or failed)"),
+  goalId: Id.optional().describe("required for 'remove'; ignored by 'clear'"),
+});
+
 export const TeamSetMsg = z.object({
   ...envelope('team.set'),
   teamId: Id.optional().describe('the team to create or change; omitted = report every team and change nothing'),
@@ -525,6 +531,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   PermissionModeSetMsg,
   CapsSetMsg,
   TeamSetMsg,
+  GoalActionMsg,
   LibraryRequestMsg,
   DevActionMsg,
 ]);
@@ -608,6 +615,10 @@ export const CLIENT_MESSAGES = {
   'agent.action': { schema: AgentActionMsg, doc: 'Pause/resume/stop an agent, or spawn (activate) an off-shift worker.' },
   'diff.request': { schema: DiffRequestMsg, doc: 'Ask for the structured diff of a worktree. Answered with `diff` (same requestId).' },
   'repo.add': { schema: RepoAddMsg, doc: 'Register a local git repo (console: `/repo add <path>`).' },
+  'goal.action': {
+    schema: GoalActionMsg,
+    doc: 'Take finished goals off the board (console: `/goals clear`, `/goals remove g9`). The goal and its tasks go together; a goal still planning or active is refused, as is one with work still live under it.',
+  },
   'team.set': {
     schema: TeamSetMsg,
     doc: 'Create, change or disband a team (console: `/team`). With no `teamId` it reports every team and changes nothing. A repo and an agent each belong to exactly one team, so naming them here takes them off whichever team had them.',

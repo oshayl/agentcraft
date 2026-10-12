@@ -101,6 +101,11 @@ public final class Foreman {
 		return link.send(ForemanJson.msg("caps.set").put("repoId", repoId).put("role", role).put("caps", caps).json());
 	}
 
+	/** Take finished goals off the board: {@code action} "clear" (all of them) or "remove" (one). */
+	public static CompletableFuture<Ack> goalAction(String action, @Nullable String goalId) {
+		return link.send(ForemanJson.msg("goal.action").put("action", action).put("goalId", goalId).json());
+	}
+
 	/**
 	 * Create, change or disband a team. Everything but {@code teamId} is optional; with none of
 	 * it, the Foreman reports every team and changes nothing.

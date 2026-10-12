@@ -40,7 +40,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Team, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Team, GoalAction, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -79,6 +79,10 @@ public final class ConsoleCommands {
 	 */
 	public record Team(@Nullable String teamId, @Nullable String name, @Nullable String lead, @Nullable List<String> members,
 		@Nullable List<String> repos, @Nullable Integer floor, boolean disband) implements Intent {
+	}
+
+	/** Take finished goals off the board. {@code goalId} null with "clear" = every finished one. */
+	public record GoalAction(String action, @Nullable String goalId) implements Intent {
 	}
 
 	/** Open the library on the Artifacts tab. {@code id} null = the newest artifact. */
@@ -144,6 +148,7 @@ public final class ConsoleCommands {
 		new Command("fix", "/fix [review|land|aside|park|unpark|deps] [repo]", "review or clear what is blocking work"),
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
+		new Command("goals", "/goals [clear | remove <id>]", "list goals, or take finished ones off the board"),
 		new Command("team", "/team [<id> lead @agent [repos a,b] [with @a,@b] [floor n] | <id> disband]", "who works on what, and under whom"),
 		new Command("artifacts", "/artifacts [id]", "what the team finished, with its open items"),
 		new Command("notes", "/notes [folder] [search]", "read your own markdown folders (vault, docs)"),
@@ -224,6 +229,7 @@ public final class ConsoleCommands {
 			case "permissions", "perms" -> parsePermissions(args);
 			case "caps", "capabilities", "access" -> parseCaps(args, s);
 			case "team", "teams" -> parseTeam(args, s);
+			case "goals" -> parseGoals(args);
 			case "artifacts", "artifact", "result", "results" -> new Artifacts(args.isEmpty() ? null : args.get(0));
 			case "notes", "vault", "library", "read" -> parseNotes(cmd, rest, args);
 			case "dev" -> parseDev(args);
@@ -235,7 +241,10 @@ public final class ConsoleCommands {
 			case "decide", "decisions", "d" -> new Decide(args.isEmpty() ? null : args.get(0));
 			case "clear", "cls" -> new Clear();
 			case "sound", "sounds", "mute" -> parseSound(cmd, args);
-			case "goal" -> rest.isEmpty() ? new Invalid("type the goal after /goal") : goal(rest, s);
+			// /goal <text> submits one; only the housekeeping verbs mean the other thing, so
+			// "/goal clear the backlog" is still a goal and not a command
+			case "goal" -> rest.isEmpty() ? new Invalid("type the goal after /goal")
+				: isGoalVerb(args) ? parseGoals(args) : goal(rest, s);
 			default -> new Invalid("unknown command /" + cmd + " (/help lists them)");
 		};
 	}
@@ -300,6 +309,31 @@ public final class ConsoleCommands {
 		"write", "the lead may change files, like a worker",
 		"force", "force-push, delete a branch, push to a base branch");
 	private static final List<String> CAP_ROLES = List.of("lead", "worker", "workers", "both");
+
+	/** The words that make {@code /goal ...} housekeeping rather than a new goal. */
+	private static boolean isGoalVerb(List<String> args) {
+		if (args.isEmpty()) {
+			return false;
+		}
+		String a = args.get(0).toLowerCase(Locale.ROOT);
+		boolean one = (a.equals("remove") || a.equals("rm") || a.equals("delete")) && args.size() == 2 && args.get(1).matches("(?i)g\\d+");
+		return args.size() == 1 && (a.equals("clear") || a.equals("tidy") || a.equals("prune")) || one;
+	}
+
+	/** {@code /goals} lists, {@code /goals clear} drops every finished one, {@code /goals remove g9} one. */
+	private static Intent parseGoals(List<String> args) {
+		if (args.isEmpty()) {
+			return new Status();
+		}
+		String a = args.get(0).toLowerCase(Locale.ROOT);
+		if (a.equals("clear") || a.equals("tidy") || a.equals("prune")) {
+			return new GoalAction("clear", null);
+		}
+		if ((a.equals("remove") || a.equals("rm") || a.equals("delete")) && args.size() > 1) {
+			return new GoalAction("remove", args.get(1).toLowerCase(Locale.ROOT));
+		}
+		return new Invalid("usage: /goals [clear | remove <id>]");
+	}
 
 	/**
 	 * {@code /team} reports them; {@code /team clients lead @juniper repos travis-murphy with
@@ -774,6 +808,7 @@ public final class ConsoleCommands {
 			case Permissions p -> p.mode() == null ? "cycle permissions" : "permissions: " + p.mode();
 			case Caps c -> c.caps() == null ? "show what agents may reach"
 				: (c.role() == null ? "" : c.role() + " in ") + repoName(c.repoId(), s) + ": " + c.caps();
+			case GoalAction ga -> ga.goalId() == null ? "clear every finished goal" : "remove " + ga.goalId();
 			case Team t -> t.teamId() == null ? "show the teams"
 				: t.disband() ? "disband " + t.teamId()
 				: (t.lead() != null ? t.teamId() + " under " + displayName(t.lead(), s) : "change " + t.teamId())

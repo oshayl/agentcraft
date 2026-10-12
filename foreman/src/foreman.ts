@@ -834,6 +834,42 @@ export class Foreman {
         const line = this.setRepoCapabilities(msg.repoId, msg.role, caps);
         return { lines: [line] };
       }
+      case 'goal.action': {
+        const dead = (g: Goal) => g.status === 'done' || g.status === 'cancelled' || g.status === 'failed';
+        const targets = msg.action === 'clear' ? this.goals().filter(dead) : [this.goal(msg.goalId ?? '')].filter((g): g is Goal => !!g);
+        if (msg.action === 'remove' && !targets.length) throw new ClientError(`no goal ${msg.goalId}`);
+        if (!targets.length) {
+          const line = 'Nothing to clear: every goal is still going.';
+          this.bus.feed('system', line);
+          return { lines: [line], removed: 0 };
+        }
+        const lines: string[] = [];
+        let removed = 0;
+        for (const g of targets) {
+          if (!dead(g)) {
+            lines.push(`${g.id} is still ${g.status}; cancel it first (/task ... cancel, or let it finish)`);
+            continue;
+          }
+          // Its tasks go with it. A task whose goal is gone is a card on the wall that belongs to
+          // nothing and can never be explained, so a goal that cannot take its work with it is
+          // not removed at all.
+          const mine = this.tasks.list().filter((t) => t.goalId === g.id);
+          const live = mine.filter((t) => t.status !== 'done' && t.status !== 'cancelled');
+          if (live.length) {
+            lines.push(`${g.id} still has ${live.length} task(s) live (${live.map((t) => t.id).join(', ')}); cancel them first`);
+            continue;
+          }
+          this.store.data.tasks = this.store.data.tasks.filter((t) => t.goalId !== g.id);
+          this.store.data.goals = this.store.data.goals.filter((x) => x.id !== g.id);
+          this.store.markDirty();
+          lines.push(`Removed ${g.id} (${truncate(g.text, 48)}) and its ${mine.length} task(s)`);
+          removed++;
+        }
+        // the board is rebuilt from the snapshot: there is no "goal.remove" on the wire
+        for (const l of lines) this.bus.feed('system', l);
+        if (removed) this.emit(this.snapshot());
+        return { lines, removed };
+      }
       case 'team.set': {
         const describe = (t: Team) =>
           `${t.id}${t.id === this.teams.primary().id ? ' (primary)' : ''}: ${t.name} — lead ${this.nameOf(t.lead)}, ` +

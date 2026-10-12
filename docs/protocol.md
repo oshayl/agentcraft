@@ -1118,6 +1118,25 @@ Register a local git repo (console: `/repo add <path>`).
 }
 ```
 
+### `goal.action`
+
+Take finished goals off the board (console: `/goals clear`, `/goals remove g9`). The goal and its tasks go together; a goal still planning or active is refused, as is one with work still live under it.
+
+| field | type | required | notes |
+| --- | --- | --- | --- |
+| `id` | string | no | client correlation id; the Foreman answers with `ack` {re: id} |
+| `action` | `remove` \| `clear` | yes | 'remove' one goal; 'clear' every goal that is finished with (done, cancelled or failed) |
+| `goalId` | string | no | required for 'remove'; ignored by 'clear' |
+
+```json
+{
+  "v": 1,
+  "type": "goal.action",
+  "id": "c25",
+  "action": "clear"
+}
+```
+
 ### `team.set`
 
 Create, change or disband a team (console: `/team`). With no `teamId` it reports every team and changes nothing. A repo and an agent each belong to exactly one team, so naming them here takes them off whichever team had them.
