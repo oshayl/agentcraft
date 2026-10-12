@@ -105,34 +105,57 @@ final class Penthouse {
 		return new Room(floor, x0 + 1, z0 + 1, x1 - 1, z1 - 1);
 	}
 
+	/** Wall radius of the stair tower: a seven by seven tower round a five by five well. */
+	static final int TOWER_R = 3;
+	/** How far the floor oversails, for whoever is placing the tower clear of it. */
+	static int oversail() {
+		return OVERSAIL;
+	}
+
 	/**
-	 * A spiral stair in a glass tower against the building, from {@code bottom} up to the
-	 * penthouse floor.
+	 * The ring of treads, anticlockwise from the north cell. Orthogonally adjacent in sequence,
+	 * which is the part that matters: the pathfinder will not cut a corner past the newel, so a
+	 * spiral that only worked diagonally would be a stair no agent could use.
+	 */
+	private static final int[][] RING = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+	private static final Direction[] FACING = {Direction.EAST, Direction.SOUTH, Direction.SOUTH, Direction.WEST, Direction.WEST, Direction.NORTH,
+		Direction.NORTH, Direction.EAST};
+	/**
+	 * The second cell of each tread, out towards the wall: everything on the outer ring that is
+	 * orthogonally beside its tread. This is what makes the stair two wide - you can pass someone
+	 * on it, and it reads as a staircase rather than a ladder with corners. The four corners of
+	 * the well are beside no tread at all, so they stay solid and become the tower's posts.
+	 */
+	private static final int[][][] OUTER = {
+		{{0, -2}}, {{1, -2}, {2, -1}}, {{2, 0}}, {{2, 1}, {1, 2}}, {{0, 2}}, {{-1, 2}, {-2, 1}}, {{-2, 0}}, {{-2, -1}, {-1, -2}},
+	};
+	/** The ring cell the landings and the doorways are on (west). */
+	private static final int WEST = 6;
+
+	/**
+	 * A spiral stair in a glass tower beside the building, from {@code bottom} to {@code top},
+	 * arriving level at every height in {@code stops}.
 	 *
 	 * <p>The build came with ladders, and an agent cannot climb one: the pathfinder walks a grid
-	 * and steps at most a block at a time. A spiral solves that - a three by three well, the
-	 * middle a newel, the eight cells round it a tread each, rising a block per tread. Those
-	 * eight are orthogonally adjacent in sequence, which is the part that matters: the
-	 * pathfinder will not cut a corner past the newel, so a spiral that only worked diagonally
-	 * would be a stair no agent could use.
+	 * and steps at most a block at a time. A spiral solves that - a five by five well, a newel in
+	 * the middle, and eight treads a turn each two cells wide, rising a block per tread.
 	 *
-	 * <p>It stands in its own tower rather than threading the house, because the floors above
-	 * the ground are set back and a stair cut through them hangs in the air halfway up.
+	 * <p>It stands in its own tower rather than threading the house, because the floors above the
+	 * ground are set back and a stair cut through them hangs in the air halfway up. It also
+	 * stands clear of the penthouse above: a tower overlapping that floor carved its own shaft
+	 * out of the work floor's east side, taking a merge station with it.
+	 *
+	 * <p>{@code stops} are the heights that get a landing and a doorway. Anything closer than
+	 * four blocks to the last landing is dropped: a flight shorter than that puts two treads in
+	 * one column within a block of each other, and then neither can be stood on.
 	 */
-	static void spiral(Plan p, int cx, int cz, int bottom, int top) {
-		int r = 2;
-		shaft(p, cx, cz, r, bottom, top);
+	static java.util.List<Integer> spiral(Plan p, int cx, int cz, int bottom, int top, int[] stops) {
+		shaft(p, cx, cz, TOWER_R, bottom, top);
 
-		// Where the stair has to arrive level: every height beside the tower you could stand on -
-		// this building's floors - plus the two ends. Floors closer together than four blocks are
-		// dropped: a flight shorter than that puts two treads in one column within a block of
-		// each other, and then neither can be stood on.
 		java.util.List<Integer> floors = new java.util.ArrayList<>();
 		floors.add(bottom);
-		int wx = cx - r - 1;
-		for (int y = bottom + 4; y <= top - 4; y++) {
-			if (!p.get(wx, y - 1, cz).isAir() && p.get(wx, y, cz).isAir() && p.get(wx, y + 1, cz).isAir()
-				&& y - floors.get(floors.size() - 1) >= 4) {
+		for (int y : stops) {
+			if (y > bottom + 3 && y < top - 3 && y - floors.get(floors.size() - 1) >= 4) {
 				floors.add(y);
 			}
 		}
@@ -141,66 +164,55 @@ final class Penthouse {
 		}
 		floors.add(top);
 
-		int[][] ring = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
-		Direction[] facing = {Direction.EAST, Direction.SOUTH, Direction.SOUTH, Direction.WEST, Direction.WEST, Direction.NORTH,
-			Direction.NORTH, Direction.EAST};
-		int west = 6; // the cell the doorways open onto
-		int i = west;
-		landing(p, cx, cz, r, floors.get(0));
+		int i = WEST;
+		landing(p, cx, cz, TOWER_R, floors.get(0));
 		for (int f = 1; f < floors.size(); f++) {
 			int from = floors.get(f - 1);
-			int to = floors.get(f);
-			int climb = to - from;
+			int climb = floors.get(f) - from;
 			// A whole number of turns per flight, so every landing comes back round to the west
 			// cell. The rise is spread over the turn rather than taken a block at a time: an
 			// eight-cell turn that climbs less than eight has to go flat somewhere, and doing
 			// that all in one place is what made the stair meet itself and dead-end.
-			int turns = Math.max(1, (climb + 7) / 8);
-			int cells = turns * 8;
-			int y = from;
-			for (int k = 0; k < cells; k++) {
-				int risen = (k + 1) * climb / cells;
-				int next = from + risen;
+			int cells = Math.max(1, (climb + 7) / 8) * 8;
+			for (int k = 0; k < cells - 1; k++) {
 				i = (i + 1) % 8;
-				if (k == cells - 1) {
-					break; // the last cell of the flight is the landing itself
-				}
-				tread(p, cx, cz, ring[i], next - 1, facing[i]);
-				y = next;
+				tread(p, cx, cz, i, from + (k + 1) * climb / cells - 1);
 			}
-			landing(p, cx, cz, r, to);
-			i = west;
+			landing(p, cx, cz, TOWER_R, floors.get(f));
+			i = WEST;
 		}
 		for (int yy = bottom - 2; yy <= top + 1; yy++) {
 			p.set(cx, yy, cz, TRIM);
 		}
+		return floors;
 	}
 
 	/**
 	 * Walks the finished stair the way an agent would and says where it breaks, or null when it
-	 * goes all the way up. Three rebuilds in a row left a stair that looked right and dead-ended
-	 * a few steps in, so the build checks its own work: for every height there has to be one
-	 * cell you can stand in, and the next one up has to be beside it.
+	 * goes all the way up and every landing is on the way.
+	 *
+	 * <p>Three rebuilds in a row left a stair that looked right and dead-ended a few steps in, so
+	 * the build checks its own work. The walk is the pathfinder's own rule and nothing softer: a
+	 * cell you can stand in, a neighbour on one of the four sides, at most one block up or down.
+	 * No diagonals, because a diagonal past the newel is a corner the pathfinder will not cut.
 	 */
-	static @Nullable String check(Plan p, int cx, int cz, int bottom, int top) {
-		int[][] ring = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
-		// every place in the well you could stand, as (ring index, height)
+	static @Nullable String check(Plan p, int cx, int cz, int bottom, int top, java.util.List<Integer> landings) {
 		java.util.Set<Long> stand = new java.util.HashSet<>();
-		for (int i = 0; i < ring.length; i++) {
-			int x = cx + ring[i][0];
-			int z = cz + ring[i][1];
-			for (int y = bottom; y <= top + 1; y++) {
-				if (!p.get(x, y - 1, z).isAir() && p.get(x, y, z).isAir() && p.get(x, y + 1, z).isAir()) {
-					stand.add(((long) i << 32) | (y & 0xffffffffL));
+		for (int dx = -TOWER_R + 1; dx <= TOWER_R - 1; dx++) {
+			for (int dz = -TOWER_R + 1; dz <= TOWER_R - 1; dz++) {
+				for (int y = bottom; y <= top + 1; y++) {
+					int x = cx + dx;
+					int z = cz + dz;
+					if (!p.get(x, y - 1, z).isAir() && p.get(x, y, z).isAir() && p.get(x, y + 1, z).isAir()) {
+						stand.add(cell(dx, dz, y));
+					}
 				}
 			}
 		}
-		// walk from the bottom the way an agent would: a neighbouring cell, at most a block up
 		java.util.ArrayDeque<Long> queue = new java.util.ArrayDeque<>();
 		java.util.Set<Long> seen = new java.util.HashSet<>();
-		int highest = -1;
 		for (long k : stand) {
-			if ((int) (k & 0xffffffffL) == bottom) {
+			if ((int) (k & 0xffff) - 2048 == bottom) {
 				queue.add(k);
 				seen.add(k);
 			}
@@ -208,37 +220,54 @@ final class Penthouse {
 		if (queue.isEmpty()) {
 			return "the stair has no bottom step at y=" + bottom;
 		}
+		int highest = Integer.MIN_VALUE;
+		java.util.Set<Integer> reached = new java.util.HashSet<>();
 		while (!queue.isEmpty()) {
 			long k = queue.poll();
-			int i = (int) (k >> 32);
-			int y = (int) (k & 0xffffffffL);
+			int dx = (int) (k >> 40) - 8;
+			int dz = (int) ((k >> 24) & 0xffff) - 8;
+			int y = (int) (k & 0xffff) - 2048;
 			highest = Math.max(highest, y);
-			for (int d = -1; d <= 1; d += 2) {
-				int j = Math.floorMod(i + d, ring.length);
-				// the ring's cells are orthogonally adjacent in sequence; the corners are not
-				if (Math.abs(ring[j][0] - ring[i][0]) + Math.abs(ring[j][1] - ring[i][1]) != 1) {
-					continue;
-				}
+			if (dx == -1 && dz == 0) {
+				reached.add(y); // the landing cell at this height, which is where a doorway is
+			}
+			for (int[] d : new int[][] {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
 				for (int dy = -1; dy <= 1; dy++) {
-					long next = ((long) j << 32) | ((y + dy) & 0xffffffffL);
+					long next = cell(dx + d[0], dz + d[1], y + dy);
 					if (stand.contains(next) && seen.add(next)) {
 						queue.add(next);
 					}
 				}
 			}
 		}
-		return highest >= top ? null : "the stair stops at y=" + highest + " and the top is y=" + top;
+		if (highest < top) {
+			return "the stair stops at y=" + highest + " and the top is y=" + top;
+		}
+		for (int y : landings) {
+			if (!reached.contains(y)) {
+				return "the stair passes y=" + y + " without a landing you can walk onto";
+			}
+		}
+		return null;
 	}
 
-	/** The glass well the stair winds up, open inside and walled outside. */
+	/** (dx, dz, y) as one key; the offsets keep every part positive without a sign to mask off. */
+	private static long cell(int dx, int dz, int y) {
+		return ((long) (dx + 8) << 40) | ((long) (dz + 8) << 24) | (y + 2048);
+	}
+
+	/** The glass well the stair winds up, open inside, walled outside, solid at the corners. */
 	private static void shaft(Plan p, int cx, int cz, int r, int bottom, int top) {
 		for (int y = bottom - 2; y <= top + 2; y++) {
 			for (int dx = -r; dx <= r; dx++) {
 				for (int dz = -r; dz <= r; dz++) {
 					boolean wall = Math.abs(dx) == r || Math.abs(dz) == r;
 					boolean corner = Math.abs(dx) == r && Math.abs(dz) == r;
+					// the four cells of the well no tread reaches: posts, so the tower has corners
+					boolean post = Math.abs(dx) == r - 1 && Math.abs(dz) == r - 1;
 					if (!wall) {
-						p.set(cx + dx, y, cz + dz, y == bottom - 2 || y == top + 2 ? WHITE : Blocks.AIR.defaultBlockState());
+						BlockState fill = y == bottom - 2 || y == top + 2 ? WHITE : post ? TRIM : Blocks.AIR.defaultBlockState();
+						p.set(cx + dx, y, cz + dz, fill);
 					} else if (y == bottom - 2 || y == top + 2 || corner || (y - bottom) % 5 == 0) {
 						p.set(cx + dx, y, cz + dz, WHITE);
 					} else {
@@ -249,41 +278,96 @@ final class Penthouse {
 		}
 	}
 
-	private static void tread(Plan p, int cx, int cz, int[] c, int y, Direction f) {
-		p.set(cx + c[0], y, cz + c[1], St.stairs(Blocks.DARK_OAK_STAIRS, f, false));
+	private static void tread(Plan p, int cx, int cz, int i, int y) {
+		Direction f = FACING[i];
+		p.set(cx + RING[i][0], y, cz + RING[i][1], St.stairs(Blocks.DARK_OAK_STAIRS, f, false));
+		for (int[] o : OUTER[i]) {
+			p.set(cx + o[0], y, cz + o[1], St.stairs(Blocks.DARK_OAK_STAIRS, f, false));
+		}
 	}
 
 	/**
-	 * A floor-level landing: one cell, and the doorway beside it.
+	 * A floor-level landing: somewhere to arrive, and a doorway three wide beside it.
 	 *
-	 * <p>Only the west cell is touched, and that is the point. The ring comes back to each
-	 * column every eight treads, so a landing that also tidied its neighbours - levelling them,
-	 * clearing headroom over them - deleted the treads those columns hold on the turn above, and
-	 * the stair ended in a dead end a few steps up. Twice. The landing is the tread the stair
-	 * already arrived on, made a full block so it reads as a floor rather than a step.
+	 * <p>Only the west side is touched, and only outwards, and that is the point. The ring comes
+	 * back to each column every eight treads, so a landing that also levelled its neighbours
+	 * round the ring deleted the treads those columns hold on the turn above, and the stair ended
+	 * in a dead end a few steps up. Twice. What it may take is the outer half of the two treads
+	 * either side: those are the widening, not the climb, so the stair simply goes single file
+	 * for one step as you step off it.
 	 */
 	private static void landing(Plan p, int cx, int cz, int r, int y) {
-		p.set(cx - 1, y - 1, cz, TRIM);
-		for (int h = 0; h <= 2; h++) {
-			p.set(cx - 1, y + h, cz, Blocks.AIR.defaultBlockState());
+		for (int dz = -1; dz <= 1; dz++) {
+			for (int dx = -2; dx <= -1; dx++) {
+				if (dx == -1 && dz != 0) {
+					continue; // the treads either side of the landing: the climb, left alone
+				}
+				p.set(cx + dx, y - 1, cz + dz, TRIM);
+				for (int h = 0; h <= 2; h++) {
+					p.set(cx + dx, y + h, cz + dz, Blocks.AIR.defaultBlockState());
+				}
+			}
+			// through the wall: three wide and three high, with a sill you step out onto
+			p.set(cx - r, y - 1, cz + dz, TRIM);
+			for (int h = 0; h <= 2; h++) {
+				p.set(cx - r, y + h, cz + dz, Blocks.AIR.defaultBlockState());
+			}
 		}
-		// through the wall: two high, with a sill you step out onto
-		for (int h = 0; h <= 1; h++) {
-			p.set(cx - r, y + h, cz, Blocks.AIR.defaultBlockState());
+		p.set(cx - 2, y + 3, cz, ModBlocks.GLOW_PANEL.defaultBlockState());
+	}
+
+	/**
+	 * The glazed link from a landing into the building: floor, headroom and a roof, driven west
+	 * from the tower until it reaches ground the floor already has.
+	 *
+	 * <p>How far that is differs storey by storey - this facade is glass on one floor, a terrace
+	 * on another and a wall on the third - so it is measured rather than assumed, and the link
+	 * stops at the first cell of real floor it finds instead of punching on through the house.
+	 *
+	 * @return true when it reached the building
+	 */
+	static boolean link(Plan p, int fromX, int z, int y, int reach) {
+		// Floor to stand on, not a clear cell: the link clears what is at head and foot height as
+		// it goes, so asking for an empty doorway here stopped at neither of the two storeys
+		// whose facade has a planter or a pane of glass on that line, and bulldozed eight blocks
+		// into the house looking for one.
+		int to = Integer.MIN_VALUE;
+		for (int x = fromX - 1; x >= fromX - reach; x--) {
+			if (!p.get(x, y - 1, z).isAir()) {
+				to = x;
+				break;
+			}
 		}
-		p.set(cx - r, y - 1, cz, TRIM);
+		// nothing to join: carve the whole reach anyway rather than leave a doorway onto a drop
+		boolean found = to != Integer.MIN_VALUE;
+		int end = found ? to : fromX - reach;
+		for (int x = fromX; x >= end; x--) {
+			for (int dz = -1; dz <= 1; dz++) {
+				p.set(x, y - 1, z + dz, FLOOR);
+				for (int h = 0; h <= 2; h++) {
+					p.set(x, y + h, z + dz, Blocks.AIR.defaultBlockState());
+				}
+			}
+			for (int dz = -2; dz <= 2; dz += 4) {
+				for (int h = -1; h <= 3; h++) {
+					p.set(x, y + h, z + dz, Math.abs(h) == 3 || h == -1 ? WHITE : GLASS);
+				}
+			}
+			p.set(x, y + 3, z, x % 4 == 0 ? ModBlocks.GLOW_PANEL.defaultBlockState() : WHITE);
+		}
+		return found;
 	}
 
 	/**
 	 * The fit-out: desks along the long wall, the task wall facing them, the library and the
 	 * terminals on the short walls, and a table in the middle for whoever is running the day.
 	 */
-	static void fitOut(Plan p, Anchors.Builder a, Room r, List<String> agents) {
+	static void fitOut(Plan p, Anchors.Builder a, Room r, List<String> agents, int doorZ) {
 		int y = r.y();
 		desks(p, a, r, agents);
 		taskWall(p, a, r);
 		library(p, a, r);
-		workbench(p, a, r);
+		workbench(p, a, r, doorZ);
 		table(p, a, r);
 		lounge(p, a, r);
 
@@ -391,29 +475,47 @@ final class Penthouse {
 		p.set(xw + 1, y, z0 - 1, St.of(Blocks.POTTED_AZALEA));
 	}
 
-	/** Terminals and the merge station on the east wall, with a bench of lamps for the test runs. */
-	private static void workbench(Plan p, Anchors.Builder a, Room r) {
+	/**
+	 * Terminals and the merge station on the east wall, with a bench of lamps for the test runs.
+	 *
+	 * <p>{@code doorZ} is where the stair arrives on this wall. Nothing is placed within a block
+	 * of it: the way in gets cut through this wall after the fit-out, and a station standing in
+	 * the doorway is simply deleted - which is how the second merge station disappeared, leaving
+	 * an anchor an agent walked to and nothing to work at when it got there.
+	 */
+	private static void workbench(Plan p, Anchors.Builder a, Room r, int doorZ) {
 		int y = r.y();
 		int xe = r.x1();
 		int z = r.z0() + 2;
-		for (int i = 1; i <= 2; i++) {
-			p.set(xe, y, z, TRIM);
-			p.set(xe, y + 1, z, ModBlocks.CONSOLE_TERMINAL.defaultBlockState().setValue(FacingEntityBlock.FACING, Direction.WEST));
-			a.put(AnchorNames.slot(AnchorNames.TERMINAL, i), xe - 1.5, y, z + 0.5, 270, 0);
-			z += 2;
-		}
-		z += 1;
-		for (int i = 1; i <= 2; i++) {
-			p.set(xe, y, z, ModBlocks.MERGE_STATION.defaultBlockState().setValue(FacingEntityBlock.FACING, Direction.WEST));
-			a.put(AnchorNames.slot(AnchorNames.MERGESTATION, i), xe - 1.5, y, z + 0.5, 270, 0);
-			z += 2;
-		}
-		z += 1;
-		for (int i = 1; i <= 2; i++) {
-			p.set(xe, y, z, TRIM);
-			p.set(xe, y + 1, z, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.IDLE));
-			a.put(AnchorNames.slot(AnchorNames.TESTBENCH, i), xe - 1.5, y, z + 0.5, 270, 0);
-			z += 2;
+		int[] n = {1, 1, 1};
+		// three benches in order up the wall, stepping over the doorway rather than into it
+		for (int stage = 0; stage < 3 && z <= r.z1(); stage++) {
+			for (int i = 0; i < 2 && z <= r.z1(); i++) {
+				while (Math.abs(z - doorZ) <= 1 && z <= r.z1()) {
+					z++;
+				}
+				if (z > r.z1()) {
+					break;
+				}
+				switch (stage) {
+					case 0 -> {
+						p.set(xe, y, z, TRIM);
+						p.set(xe, y + 1, z, ModBlocks.CONSOLE_TERMINAL.defaultBlockState().setValue(FacingEntityBlock.FACING, Direction.WEST));
+						a.put(AnchorNames.slot(AnchorNames.TERMINAL, n[0]++), xe - 1.5, y, z + 0.5, 270, 0);
+					}
+					case 1 -> {
+						p.set(xe, y, z, ModBlocks.MERGE_STATION.defaultBlockState().setValue(FacingEntityBlock.FACING, Direction.WEST));
+						a.put(AnchorNames.slot(AnchorNames.MERGESTATION, n[1]++), xe - 1.5, y, z + 0.5, 270, 0);
+					}
+					default -> {
+						p.set(xe, y, z, TRIM);
+						p.set(xe, y + 1, z, ModBlocks.STATUS_LAMP.defaultBlockState().setValue(StatusLampBlock.STATUS, LampStatus.IDLE));
+						a.put(AnchorNames.slot(AnchorNames.TESTBENCH, n[2]++), xe - 1.5, y, z + 0.5, 270, 0);
+					}
+				}
+				z += 2;
+			}
+			z += 1;
 		}
 	}
 

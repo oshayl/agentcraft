@@ -151,6 +151,66 @@ public final class Litematic {
 		return 0;
 	}
 
+	/**
+	 * The storeys of the build: the heights you could walk around on, above its own ground line.
+	 *
+	 * <p>The stair needs these so it can arrive level at every one of them. It used to find them
+	 * by looking at a single column beside the tower and asking whether you could stand there,
+	 * which worked until the builder put a plant pot on that spot (the landing came out a block
+	 * high) and a pane of glass on the one above it (that floor got no landing at all, and the
+	 * top of the house was reachable only by jumping out of a window).
+	 *
+	 * <p>Counting the whole floor instead: a storey is a y where a lot of cells are standable and
+	 * roofed, and which is a local peak - the floor above a staircase opening has a few standable
+	 * cells too, and those are not storeys.
+	 *
+	 * @return schematic y values, lowest first
+	 */
+	public int[] floors(int groundY) {
+		int[] count = new int[sizeY];
+		int best = 0;
+		for (int y = Math.max(1, groundY + 1); y < sizeY - 2; y++) {
+			int n = 0;
+			for (int x = 0; x < sizeX; x++) {
+				for (int z = 0; z < sizeZ; z++) {
+					if (at(x, y - 1, z).isAir() || !at(x, y, z).isAir() || !at(x, y + 1, z).isAir()) {
+						continue;
+					}
+					boolean roofed = false;
+					for (int h = 2; h <= 8 && !roofed; h++) {
+						roofed = !at(x, y + h, z).isAir();
+					}
+					if (roofed) {
+						n++;
+					}
+				}
+			}
+			count[y] = n;
+			best = Math.max(best, n);
+		}
+		// a quarter of the biggest floor: enough to be a storey, not a mezzanine or a stair head
+		int floor = Math.max(8, best / 4);
+		java.util.List<Integer> out = new java.util.ArrayList<>();
+		for (int y = 1; y < sizeY - 1; y++) {
+			if (count[y] < floor || count[y] < count[y - 1] || count[y] < count[y + 1]) {
+				continue;
+			}
+			// one storey per flight: two peaks a block apart are one floor seen twice
+			if (!out.isEmpty() && y - out.get(out.size() - 1) < 3) {
+				if (count[y] > count[out.get(out.size() - 1)]) {
+					out.set(out.size() - 1, y);
+				}
+				continue;
+			}
+			out.add(y);
+		}
+		int[] ys = new int[out.size()];
+		for (int i = 0; i < ys.length; i++) {
+			ys[i] = out.get(i);
+		}
+		return ys;
+	}
+
 	public static Litematic read(Path file) throws IOException {
 		if (!Files.isRegularFile(file)) {
 			throw new IOException("no such schematic: " + file);

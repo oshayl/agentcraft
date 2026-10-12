@@ -126,23 +126,44 @@ public final class SchematicHqBuilder implements HqBuilder {
 		java.util.Set<String> fitted = new java.util.LinkedHashSet<>();
 		Penthouse.Room room = null;
 		String stairFault = null;
+		String stairNote = "";
 		int bottomY = GROUND;
 		if (b != null) {
 			room = Penthouse.build(p, y0 + b[4], SITE_X + b[0], SITE_Z + b[1], SITE_X + b[2], SITE_Z + b[3]);
-			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()));
+			Penthouse.fitOut(p, a, room, new ArrayList<>(Cast.ids()), (SITE_Z + b[1] + SITE_Z + b[3]) / 2);
 			Penthouse.beacon(p, room, room.y() + Penthouse.HEIGHT);
-			int tx = SITE_X + b[2] + 2;
+			// Clear of the penthouse, not flush with it: a tower on the work floor's own footprint
+			// carved its shaft out of the east side of that floor and took a merge station with
+			// it, and left a wall of the shaft standing in the middle of the room.
+			int tx = SITE_X + b[2] + Penthouse.oversail() + 1 + Penthouse.TOWER_R;
 			int tz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
 			// the pool first: the stair has to know how far down it is going
 			int poolDeck = Amenities.poolside(p, a, SITE_X, SITE_Z, SITE_X + lit.sizeX - 1, SITE_Z + lit.sizeZ - 1, GROUND - 1);
 			int bottom = poolDeck > 0 ? poolDeck : GROUND + 1;
 			bottomY = bottom;
-			Penthouse.spiral(p, tx, tz, bottom, room.y());
-			stairFault = Penthouse.check(p, tx, tz, bottom, room.y());
-			if (poolDeck > 0) {
-				Amenities.passage(p, tx - 2, tz, SITE_X + b[2], poolDeck);
+			// every storey of the house, measured off the schematic rather than guessed at from
+			// one column beside the tower (which missed the top floor entirely)
+			int[] storeys = lit.floors(groundY);
+			for (int i = 0; i < storeys.length; i++) {
+				storeys[i] += y0;
 			}
-			Amenities.lobby(p, a, tx, tz, GROUND, 2);
+			List<Integer> landings = Penthouse.spiral(p, tx, tz, bottom, room.y(), storeys);
+			// a glazed link from each landing into the building, so every floor has a way in
+			int bridged = 0;
+			for (int y : landings) {
+				if (y == bottom) {
+					continue; // the lobby wraps the tower; it needs no bridge
+				}
+				if (Penthouse.link(p, tx - Penthouse.TOWER_R - 1, tz, y, Penthouse.oversail() + 6)) {
+					bridged++;
+				}
+			}
+			stairFault = Penthouse.check(p, tx, tz, bottom, room.y(), landings);
+			stairNote = landings.size() + " landing(s), " + bridged + " joined to the building";
+            if (poolDeck > 0) {
+				Amenities.passage(p, tx - Penthouse.TOWER_R - 1, tz, SITE_X + b[2], poolDeck);
+			}
+			Amenities.lobby(p, a, tx, tz, GROUND, Penthouse.TOWER_R);
 			// somewhere to be while the team works: a run through the grounds, out past the woods
 			int hcx = (SITE_X + b[0] + SITE_X + b[2]) / 2;
 			int hcz = (SITE_Z + b[1] + SITE_Z + b[3]) / 2;
@@ -186,7 +207,8 @@ public final class SchematicHqBuilder implements HqBuilder {
 		return "\"" + lit.name + "\" by " + lit.author + ": " + lit.sizeX + "x" + lit.sizeY + "x" + lit.sizeZ + ", " + st.changed()
 			+ " blocks placed. Main floor y=" + floor.y + ", " + placed.size() + " station(s) placed"
 			+ (placed.isEmpty() ? "" : ", " + placed.size() + " placed by hand")
-			+ (stairFault == null ? ", the stair walks from bottom to top" : ", BUT " + stairFault) + swapped + unknown;
+			+ (stairFault == null ? ", the stair walks from bottom to top" : ", BUT " + stairFault)
+			+ (stairNote.isEmpty() ? "" : " (" + stairNote + ")") + swapped + unknown;
 	}
 
 	/** The station block a placement asks for (null: anchor only, nothing to place). */
