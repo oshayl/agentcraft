@@ -52,6 +52,9 @@ public class GoalScreen extends Screen {
 	private float scroll;
 	private float maxScroll;
 	private final List<Btn> buttons = new ArrayList<>();
+	/** The last click the screen was handed and where it landed, and how many it has had, for {@code dev.goals}. */
+	private @Nullable String lastClick;
+	private int clicks;
 
 	private record Btn(String id, String label, int x, int y, int w, int h, boolean primary, boolean enabled) {
 		boolean hit(double mx, double my) {
@@ -227,7 +230,9 @@ public class GoalScreen extends Screen {
 		String tally = r.total() == 0 ? "no tasks yet"
 			: r.done() + "/" + r.total() + " done" + (r.live() > 0 ? " · " + r.live() + " live" : "") + (r.stopped() > 0 ? " · " + r.stopped() + " stopped" : "");
 		Panels.text(g, font, tally, tx + 104, y + 24, muted);
-		buttons.add(new Btn("open:" + gl.id(), gl.id(), x, y, inner, ROW_H - 2, false, true));
+		// the painted highlight stops two pixels short to separate the rows; the hit box does not,
+		// so there is no dead strip between them to click into
+		buttons.add(new Btn("open:" + gl.id(), gl.id(), x, y, inner, ROW_H, false, true));
 		if (!open) {
 			return;
 		}
@@ -317,24 +322,33 @@ public class GoalScreen extends Screen {
 
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-		if (event.button() == 0) {
-			// the row sits under its own buttons, so the buttons are tested first
-			List<Btn> all = List.copyOf(buttons);
-			for (int i = all.size() - 1; i >= 0; i--) {
-				Btn b = all.get(i);
-				if (!b.hit(event.x(), event.y())) {
-					continue;
-				}
-				if (b.enabled()) {
-					press(b);
-				} else {
-					feedback = whyOff(b);
-					feedbackError = true;
-				}
-				return true;
+		if (event.button() != 0) {
+			return super.mouseClicked(event, doubleClick);
+		}
+		// the row sits under its own buttons, so the buttons are tested first
+		List<Btn> all = List.copyOf(buttons);
+		Btn hit = null;
+		for (int i = all.size() - 1; i >= 0 && hit == null; i--) {
+			if (all.get(i).hit(event.x(), event.y())) {
+				hit = all.get(i);
 			}
 		}
-		return super.mouseClicked(event, doubleClick);
+		// Every click is recorded, hit or miss. When someone says clicking this does nothing, the
+		// first question is whether the screen was handed the click at all, and the second is where
+		// it landed; without this there is no way to tell those two apart from outside the game.
+		clicks++;
+		lastClick = Math.round(event.x()) + "," + Math.round(event.y()) + " -> " + (hit == null ? "(nothing)" : hit.id())
+			+ (hit != null && !hit.enabled() ? " (off)" : "") + (doubleClick ? " (double)" : "");
+		if (hit == null) {
+			return super.mouseClicked(event, doubleClick);
+		}
+		if (hit.enabled()) {
+			press(hit, doubleClick);
+		} else {
+			feedback = whyOff(hit);
+			feedbackError = true;
+		}
+		return true;
 	}
 
 	@Override
@@ -350,13 +364,13 @@ public class GoalScreen extends Screen {
 	public void press(String id) {
 		for (Btn b : List.copyOf(buttons)) {
 			if (b.id().equals(id)) {
-				press(b);
+				press(b, false);
 				return;
 			}
 		}
 	}
 
-	private void press(Btn b) {
+	private void press(Btn b, boolean repeat) {
 		if (!b.enabled()) {
 			feedback = whyOff(b);
 			feedbackError = true;
@@ -364,7 +378,9 @@ public class GoalScreen extends Screen {
 		}
 		if (b.id().startsWith("open:")) {
 			String id = b.id().substring(5);
-			selected = id.equals(selected) ? null : id;
+			// Clicking the open row folds it away again — but not the second half of a double
+			// click, which would open it and close it in one gesture and look like nothing happened.
+			selected = id.equals(selected) && !repeat ? null : id;
 			confirm = null;
 			feedback = null;
 			return;
@@ -535,6 +551,16 @@ public class GoalScreen extends Screen {
 
 	public @Nullable String selected() {
 		return selected;
+	}
+
+	/** The last click this screen was handed, {@code "x,y -> button"}, or null if it has had none. */
+	public @Nullable String lastClick() {
+		return lastClick;
+	}
+
+	/** How many clicks this screen has been handed, hits and misses alike. */
+	public int clicks() {
+		return clicks;
 	}
 
 	private static List<FormattedCharSequence> clip(List<FormattedCharSequence> lines, int max) {

@@ -515,7 +515,10 @@ nothing up there to click) or type `/goals`.
 - Remove is off while anything is live, and says so when clicked: it names Stop goal as the way
   through rather than going quiet.
 - Dev: `dev.screen {open:"goals"}`, `dev.goals {open?: goalId, press?: button}` (the queue as the
-  screen reads it, with the button rects; press `open:<goal>` / `stop` / `remove` / `clear`).
+  screen reads it, with the button rects, plus `clicks`/`lastClick` — every click the screen was
+  handed and where it landed, misses included; press `open:<goal>` / `stop` / `remove` / `clear`).
+  `press` calls the handler directly, so it says nothing about whether a button can be hit:
+  `dev.click {x, y}` goes through the hit boxes and is what proves the screen is usable.
 
 Drawing helpers shared by both (`client.monitor.DisplayDraw`): opaque flat rects/gradients in one
 custom-geometry node per screen (a 4x4 white `DynamicTexture` on a no-blend copy of the world text

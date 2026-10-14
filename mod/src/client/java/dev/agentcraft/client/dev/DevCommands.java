@@ -38,6 +38,8 @@ import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.commands.CommandSource;
@@ -120,6 +122,10 @@ final class DevCommands {
 		DevBridge.register("dev.key", 10_000, "{key:'escape'|'key.keyboard.f3', modifiers?} or {mapping:'key.chat'} - press a key (to the open screen, else key mappings)",
 			DevCommands::key);
 		DevBridge.register("dev.type", 10_000, "{text} - type text into the focused widget of the open screen", DevCommands::type);
+		DevBridge.register("dev.click", 10_000,
+			"{x, y, button?:0, double?:false} - click the open screen at GUI coordinates, through its own hit boxes"
+				+ " (dev.state.mouse has the live pointer; a screen's press/{press} helper skips the hit boxes, this does not)",
+			DevCommands::click);
 		DevBridge.register("dev.hud", 10_000, "{hidden: bool} - hide/show the HUD (like F1)", (req, mc) -> {
 			boolean hidden = Fields.of(req).bool("hidden");
 			return DevBridge.onClient(mc, () -> {
@@ -256,6 +262,18 @@ final class DevCommands {
 		win.addProperty("osForeground", WinFocus.isForeground(w));
 		win.addProperty("iconified", w.isIconified());
 		o.add("window", win);
+		// Where the GUI thinks the pointer is, in the same coordinates a screen's hit boxes use,
+		// and whether it is captured for looking around. A screen that takes no clicks is usually
+		// one of these two — grabbed, or a pointer that stopped moving — not its own hit boxes.
+		JsonObject mouse = new JsonObject();
+		mouse.addProperty("grabbed", mc.mouseHandler.isMouseGrabbed());
+		mouse.addProperty("x", mc.mouseHandler.getScaledXPos(w));
+		mouse.addProperty("y", mc.mouseHandler.getScaledYPos(w));
+		mouse.addProperty("rawX", mc.mouseHandler.xpos());
+		mouse.addProperty("rawY", mc.mouseHandler.ypos());
+		mouse.addProperty("leftPressed", mc.mouseHandler.isLeftPressed());
+		mouse.addProperty("rightPressed", mc.mouseHandler.isRightPressed());
+		o.add("mouse", mouse);
 		o.addProperty("hudHidden", mc.gui.hud.isHidden());
 		// fov = what the last frame was rendered with; fovOption = the player's setting; fovPin = dev.camera's pin (null = none).
 		o.addProperty("fov", mc.gameRenderer.mainCamera().getFov());
@@ -973,6 +991,40 @@ final class DevCommands {
 				KeyMapping.click(key);
 				o.addProperty("clickedKey", keyName);
 			}
+			return o;
+		});
+	}
+
+	/**
+	 * A click where the mouse would put it. Every screen here also has a {@code press(id)} for its
+	 * dev command, but that goes straight to the handler: it proves the action works and says
+	 * nothing about whether the button can be hit. This goes through {@code mouseClicked}, so a
+	 * button laid out where no click can reach it fails here, in QA, instead of in front of Noira.
+	 */
+	static CompletableFuture<JsonObject> click(JsonObject json, Minecraft mc) {
+		Fields f = Fields.of(json);
+		double x = f.num("x", -32768, 32767);
+		double y = f.num("y", -32768, 32767);
+		int button = f.optInt("button", 0, 0, 7);
+		int mods = f.optInt("modifiers", 0, 0, 0xFFFF);
+		boolean dbl = f.optBool("double", false);
+		return DevBridge.onClient(mc, () -> {
+			Screen screen = mc.gui.screen();
+			if (screen == null) {
+				throw new DevException("no screen open");
+			}
+			MouseButtonEvent event = new MouseButtonEvent(x, y, new MouseButtonInfo(button, mods));
+			boolean handled = screen.mouseClicked(event, dbl);
+			screen.mouseReleased(event);
+			JsonObject o = new JsonObject();
+			o.addProperty("screen", screen.getClass().getName());
+			o.addProperty("handled", handled);
+			o.addProperty("x", x);
+			o.addProperty("y", y);
+			o.addProperty("button", button);
+			// the click may have opened another screen; say which one is in front now
+			Screen now = mc.gui.screen();
+			o.addProperty("screenNow", now == null ? null : now.getClass().getName());
 			return o;
 		});
 	}

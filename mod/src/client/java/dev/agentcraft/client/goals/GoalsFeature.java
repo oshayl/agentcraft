@@ -43,7 +43,8 @@ public final class GoalsFeature {
 	}
 
 	private static void registerDev() {
-		DevBridge.register("dev.goals", 10_000, "{open?: goalId|\"\", press?: button} -> the goal queue as the screen reads it; opens it / presses a button",
+		DevBridge.register("dev.goals", 10_000, "{open?: goalId|\"\", press?: button} -> the goal queue as the screen reads it, with its buttons and the last click it was"
+				+ " handed; opens it / presses a button (dev.click presses one through its hit boxes instead)",
 			(req, mc) -> {
 				Fields f = Fields.of(req);
 				String goalId = f.optStr("open", null);
@@ -65,6 +66,9 @@ public final class GoalsFeature {
 					o.add("goals", screen.rowsJson());
 					o.addProperty("selected", screen.selected() == null ? "" : screen.selected());
 					o.add("buttons", screen.buttonRects());
+					// what the screen has actually been clicked with, dev.click and real mice alike
+					o.addProperty("clicks", screen.clicks());
+					o.addProperty("lastClick", screen.lastClick());
 					return o;
 				});
 			});
