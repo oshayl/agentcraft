@@ -273,6 +273,8 @@ final class DevCommands {
 		mouse.addProperty("rawY", mc.mouseHandler.ypos());
 		mouse.addProperty("leftPressed", mc.mouseHandler.isLeftPressed());
 		mouse.addProperty("rightPressed", mc.mouseHandler.isRightPressed());
+		// where each button got to: SDL -> Minecraft's handler -> the open screen
+		mouse.add("events", dev.agentcraft.client.input.MouseInput.trace());
 		o.add("mouse", mouse);
 		o.addProperty("hudHidden", mc.gui.hud.isHidden());
 		// fov = what the last frame was rendered with; fovOption = the player's setting; fovPin = dev.camera's pin (null = none).

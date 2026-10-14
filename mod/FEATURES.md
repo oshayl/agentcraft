@@ -512,6 +512,10 @@ nothing up there to click) or type `/goals`.
   goal off for good, with its tasks; **Clear finished** in the header does that for all of them.
   Each arms on the first press (one clay primary, a prompt naming what goes, lapsing after 5 s)
   and sends on the second, like the task card's Stop.
+- **Keys**: `1`-`9` pick a goal (the number is drawn on the row), arrows walk the queue, `S` stops,
+  `R` removes, `C` clears, `Enter` confirms whatever is armed, `Esc` closes. Each key is printed on
+  the button it presses. The queue shipped mouse-only and was unusable the day clicks stopped
+  arriving, with the console (`/goals stop g9`) the only way left in; it is operable from either now.
 - Remove is off while anything is live, and says so when clicked: it names Stop goal as the way
   through rather than going quiet.
 - Dev: `dev.screen {open:"goals"}`, `dev.goals {open?: goalId, press?: button}` (the queue as the

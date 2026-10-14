@@ -15,8 +15,10 @@ import dev.agentcraft.client.ui.TextUtil;
 import dev.agentcraft.client.ui.UiStyle;
 import java.util.ArrayList;
 import java.util.List;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
@@ -28,6 +30,10 @@ import org.jspecify.annotations.Nullable;
  * live under it. Click one to open its actions — Stop goal (it and every unfinished task under
  * it) and Remove (a finished goal and its tasks, off the board for good), both through
  * {@code Foreman.goalAction}, with the Foreman's answer shown in place.
+ *
+ * <p>Everything here is on the keyboard too — 1-9 picks a goal, S stops it, R removes it, C
+ * clears the finished ones — because a screen whose only way in is the mouse is a screen you
+ * cannot use the day the mouse does not arrive.
  *
  * <p>Paper panel, ink text, one clay primary action, like the task card. Shootable as
  * {@code dev.screen {open:"goals"}}.
@@ -165,7 +171,9 @@ public class GoalScreen extends Screen {
 		String count = rows.isEmpty() ? "no goals yet" : running + " going, " + finished + " finished";
 		Panels.text(g, font, "Goals", x + 6, y + 3, ink);
 		Panels.text(g, font, count, x + 6 + font.width("Goals") + 8, y + 3, muted);
-		String clearLabel = "clear".equals(confirm) ? "Confirm clear" : "Clear finished";
+		// the key is on the button, not only in the footer: a shortcut nobody can see is a shortcut
+		// nobody uses, and this screen has to stay workable on the keyboard alone
+		String clearLabel = ("clear".equals(confirm) ? "Confirm clear" : "Clear finished") + " (C)";
 		int cw = font.width(clearLabel) + 12;
 		button(g, "clear", clearLabel, x + inner - cw, y, cw, 14, "clear".equals(confirm), live && !sending && finished > 0, mouseX, mouseY, true);
 		y += 14 + 6;
@@ -178,11 +186,12 @@ public class GoalScreen extends Screen {
 				top + 6, muted);
 		}
 		int ry = top - Math.round(scroll);
-		for (Row r : rows) {
+		for (int i = 0; i < rows.size(); i++) {
+			Row r = rows.get(i);
 			boolean open = r.goal().id().equals(selected);
 			int rh = ROW_H + (open ? OPEN_H : 0);
 			if (ry + rh >= top && ry <= top + listH) {
-				drawRow(g, r, open, x, ry, inner, top, listH, ink, muted, error, live, mouseX, mouseY);
+				drawRow(g, r, i, open, x, ry, inner, top, listH, ink, muted, error, live, mouseX, mouseY);
 			}
 			ry += rh;
 		}
@@ -200,12 +209,13 @@ public class GoalScreen extends Screen {
 			y += 6;
 		}
 		int kx = keycap(g, "Esc", "close", x, y);
-		if (maxScroll > 0) {
-			Panels.text(g, font, "Scroll for more", kx + 10, y, muted);
+		String keys = rows.isEmpty() ? "" : "1-9 pick · S stop · R remove · C clear" + (maxScroll > 0 ? " · scroll for more" : "");
+		if (!keys.isEmpty()) {
+			Panels.text(g, font, TextUtil.ellipsize(font, keys, x + inner - kx - 10), kx + 10, y, muted);
 		}
 	}
 
-	private void drawRow(GuiGraphicsExtractor g, Row r, boolean open, int x, int y, int inner, int top, int listH, int ink, int muted, int error,
+	private void drawRow(GuiGraphicsExtractor g, Row r, int index, boolean open, int x, int y, int inner, int top, int listH, int ink, int muted, int error,
 		boolean live, int mx, int my) {
 		Goal gl = r.goal();
 		boolean hover = mx >= x && mx < x + inner && my >= y && my < y + ROW_H && my >= top && my < top + listH;
@@ -216,9 +226,15 @@ public class GoalScreen extends Screen {
 			g.fill(x, y, x + inner, y + ROW_H - 2, UiStyle.color("palette.ui.panel_hi", 0xFFFFFBF4));
 		}
 		int tx = x + 7;
-		Panels.dot(g, family(gl), tx, y + 3, false);
-		Panels.text(g, font, gl.id(), tx + 11, y + 2, muted);
-		int sx = tx + 11 + font.width(gl.id()) + 6;
+		// the number the keyboard picks this row with; past nine there is no key, so there is no number
+		String num = index < 9 ? String.valueOf(index + 1) : "";
+		int nw = num.isEmpty() ? 0 : font.width(num) + 4;
+		if (!num.isEmpty()) {
+			Panels.text(g, font, num, tx, y + 2, muted);
+		}
+		Panels.dot(g, family(gl), tx + nw, y + 3, false);
+		Panels.text(g, font, gl.id(), tx + nw + 11, y + 2, muted);
+		int sx = tx + nw + 11 + font.width(gl.id()) + 6;
 		Panels.text(g, font, statusLabel(gl), sx, y + 2, ink);
 		String repo = repoName(gl.repoId());
 		if (!repo.isEmpty()) {
@@ -249,15 +265,15 @@ public class GoalScreen extends Screen {
 		boolean armedRemove = "remove".equals(confirm) && gl.id().equals(selected);
 		// a goal is stoppable while anything under it is unfinished, or while it is not finished itself
 		boolean stoppable = r.live() > 0 || !r.finished();
-		button(g, "stop", armedStop ? "Confirm stop" : "Stop goal", tx, by, bw, 20, armedStop, live && !sending && stoppable, mx, my, false);
-		button(g, "remove", armedRemove ? "Confirm remove" : "Remove", tx + bw + gap, by, inner - 14 - bw - gap, 20, armedRemove,
+		button(g, "stop", (armedStop ? "Confirm stop" : "Stop goal") + " (S)", tx, by, bw, 20, armedStop, live && !sending && stoppable, mx, my, false);
+		button(g, "remove", (armedRemove ? "Confirm remove" : "Remove") + " (R)", tx + bw + gap, by, inner - 14 - bw - gap, 20, armedRemove,
 			live && !sending && r.finished() && r.live() == 0, mx, my, false);
 	}
 
 	/** The line under the divider: the confirmation prompt, the Foreman's answer, or why a button is off. */
 	private @Nullable String feedbackLine(List<Row> rows, boolean live) {
 		if ("clear".equals(confirm)) {
-			return "Take every finished goal off the board, with its tasks? Press Confirm clear. (Esc just closes this.)";
+			return "Take every finished goal off the board, with its tasks? Press C again, or click Confirm clear. (Esc just closes this.)";
 		}
 		Row sel = null;
 		for (Row r : rows) {
@@ -267,10 +283,10 @@ public class GoalScreen extends Screen {
 		}
 		if (sel != null && "cancel".equals(confirm)) {
 			return "Stop " + sel.goal().id() + (sel.live() > 0 ? " and its " + sel.live() + " unfinished task(s)" : "")
-				+ "? Press Confirm stop. The finished work stays on the board. (Esc just closes this.)";
+				+ "? Press S again, or click Confirm stop. The finished work stays on the board. (Esc just closes this.)";
 		}
 		if (sel != null && "remove".equals(confirm)) {
-			return "Remove " + sel.goal().id() + " and its " + sel.total() + " task(s) for good? Press Confirm remove. (Esc just closes this.)";
+			return "Remove " + sel.goal().id() + " and its " + sel.total() + " task(s) for good? Press R again, or click Confirm remove. (Esc just closes this.)";
 		}
 		if (feedback != null) {
 			return feedback;
@@ -279,13 +295,13 @@ public class GoalScreen extends Screen {
 			return "Foreman offline: actions are disabled";
 		}
 		if (sel == null) {
-			return rows.isEmpty() ? null : "Click a goal for its actions.";
+			return rows.isEmpty() ? null : "Pick a goal for its actions: press 1-9, or click one.";
 		}
 		if (!sel.finished() && sel.live() == 0 && sel.total() > 0) {
 			return sel.goal().id() + " has no work left to stop; it finishes as soon as the Foreman catches up.";
 		}
 		if (!sel.finished()) {
-			return "Stop it to take the work off the team; Remove needs it stopped or finished first.";
+			return "S stops it and takes the work off the team; Remove (R) needs it stopped or finished first.";
 		}
 		return null;
 	}
@@ -351,6 +367,70 @@ public class GoalScreen extends Screen {
 		return true;
 	}
 
+	/**
+	 * The whole screen from the keyboard: 1-9 picks a goal, the arrows walk the queue, S/R/C are
+	 * the three actions (pressed twice, or confirmed with Enter, exactly like the buttons) and Esc
+	 * closes. The queue was mouse-only when it shipped, which made it useless the moment the clicks
+	 * stopped arriving — the console (`/goals stop g12`) was the only way left in.
+	 */
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		int k = event.input();
+		List<Row> rows = rows();
+		if (k >= InputConstants.KEY_1 && k <= InputConstants.KEY_1 + 8) {
+			return pick(rows, k - InputConstants.KEY_1);
+		}
+		if (k == InputConstants.KEY_DOWN || k == InputConstants.KEY_UP) {
+			int at = indexOf(rows, selected);
+			int next = at < 0 ? (k == InputConstants.KEY_DOWN ? 0 : rows.size() - 1) : at + (k == InputConstants.KEY_DOWN ? 1 : -1);
+			return pick(rows, Math.max(0, Math.min(rows.size() - 1, next)));
+		}
+		switch (k) {
+			case InputConstants.KEY_S -> act("stop", "Pick a goal first (1-9), then S stops it.");
+			case InputConstants.KEY_R -> act("remove", "Pick a goal first (1-9), then R removes it once it is stopped.");
+			case InputConstants.KEY_C -> act("clear", "Nothing is finished yet, so there is nothing to clear.");
+			case InputConstants.KEY_RETURN, InputConstants.KEY_NUMPADENTER -> {
+				// Enter means "yes, the thing you just asked me about": the armed action, whichever it is
+				if (confirm != null) {
+					act(confirm.equals("cancel") ? "stop" : confirm, null);
+				}
+			}
+			default -> {
+				return super.keyPressed(event);
+			}
+		}
+		return true;
+	}
+
+	/** Select the row at {@code index}; keys pick a goal, they never unpick one. */
+	private boolean pick(List<Row> rows, int index) {
+		if (index < 0 || index >= rows.size()) {
+			return false;
+		}
+		selected = rows.get(index).goal().id();
+		confirm = null;
+		feedback = null;
+		feedbackError = false;
+		return true;
+	}
+
+	private static int indexOf(List<Row> rows, @Nullable String goalId) {
+		for (int i = 0; i < rows.size(); i++) {
+			if (rows.get(i).goal().id().equals(goalId)) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/** A key's action: the button if it is on screen, otherwise the reason there is none. */
+	private void act(String buttonId, @Nullable String missing) {
+		if (!press(buttonId) && missing != null) {
+			feedback = missing;
+			feedbackError = true;
+		}
+	}
+
 	@Override
 	public boolean mouseScrolled(double mouseX, double mouseY, double horizontal, double vertical) {
 		if (maxScroll <= 0) {
@@ -360,14 +440,19 @@ public class GoalScreen extends Screen {
 		return true;
 	}
 
-	/** Press a button by id (also used by {@code dev.goals}): open:&lt;goal&gt;, stop, remove, clear. */
-	public void press(String id) {
+	/**
+	 * Press a button by id (also used by {@code dev.goals} and by the keys): open:&lt;goal&gt;, stop,
+	 * remove, clear. False when no such button is on screen — the actions only exist once a goal is
+	 * picked, and a key that lands on nothing has to say so rather than look broken.
+	 */
+	public boolean press(String id) {
 		for (Btn b : List.copyOf(buttons)) {
 			if (b.id().equals(id)) {
 				press(b, false);
-				return;
+				return true;
 			}
 		}
+		return false;
 	}
 
 	private void press(Btn b, boolean repeat) {
@@ -473,8 +558,8 @@ public class GoalScreen extends Screen {
 		}
 		if (b.id().equals("remove")) {
 			return sel.live() > 0
-				? sel.goal().id() + " still has " + sel.live() + " task(s) going. Press Stop goal first — that stops them and then this can remove them."
-				: sel.goal().id() + " is still " + sel.goal().status().wire() + "; stop it first";
+				? sel.goal().id() + " still has " + sel.live() + " task(s) going. Press S (Stop goal) first — that stops them, and then R can remove them."
+				: sel.goal().id() + " is still " + sel.goal().status().wire() + "; stop it first (S)";
 		}
 		return sel.goal().id() + " is already " + sel.goal().status().wire() + " with nothing running";
 	}

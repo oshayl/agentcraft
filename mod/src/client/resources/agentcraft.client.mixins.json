@@ -9,7 +9,10 @@
 		"ClientLevelAccessor",
 		"EntityRenderDispatcherMixin",
 		"MinecraftMixin",
-		"RenderSystemMixin"
+		"MouseHandlerMixin",
+		"RenderSystemMixin",
+		"SdlEventHandlerMixin",
+		"WindowMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
