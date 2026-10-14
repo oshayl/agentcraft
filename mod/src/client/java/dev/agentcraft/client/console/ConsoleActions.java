@@ -16,6 +16,7 @@ import dev.agentcraft.client.console.ConsoleCommands.Artifacts;
 import dev.agentcraft.client.console.ConsoleCommands.Caps;
 import dev.agentcraft.client.console.ConsoleCommands.Model;
 import dev.agentcraft.client.console.ConsoleCommands.GoalAction;
+import dev.agentcraft.client.console.ConsoleCommands.GoalQueue;
 import dev.agentcraft.client.console.ConsoleCommands.Team;
 import dev.agentcraft.client.console.ConsoleCommands.Dev;
 import dev.agentcraft.client.console.ConsoleCommands.Notes;
@@ -263,7 +264,14 @@ public final class ConsoleActions {
 					? "permissions: auto \u00b7 prompts are allowed automatically; merges still need you"
 					: "permissions: ask \u00b7 every prompt comes to you " + UiBits.CHECK;
 			}, "switching\u2026");
-			case GoalAction ga -> track(Foreman.goalAction(ga.action(), ga.goalId()), raw, restore, ConsoleActions::lines, "tidying\u2026");
+			case GoalAction ga -> track(Foreman.goalAction(ga.action(), ga.goalId()), raw, restore, ConsoleActions::lines,
+				ga.action().equals("cancel") ? "stopping\u2026" : "tidying\u2026");
+			case GoalQueue gq -> {
+				ConsoleLog.remember(raw);
+				clearFeedback();
+				dev.agentcraft.client.goals.GoalsFeature.open(gq.goalId());
+				return After.CLOSE;
+			}
 			case Team t -> track(Foreman.setTeam(t.teamId(), t.name(), t.lead(), t.members(), t.repos(), t.floor(), t.disband()), raw, restore,
 				ConsoleActions::lines, t.teamId() == null ? "reading\u2026" : "setting up\u2026");
 			case Caps c -> track(Foreman.setCaps(c.repoId(), c.role(), c.caps()), raw, restore, ConsoleActions::lines,

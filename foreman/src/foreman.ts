@@ -63,6 +63,8 @@ export interface Backend {
   onAgentAction(agentId: string, action: 'pause' | 'resume' | 'stop' | 'spawn', arg?: string): Promise<void> | void;
   /** Every task of a goal is done: the lead's last turn on it (the artifact), if the backend wants one. */
   onGoalComplete?(goal: Goal): void;
+  /** The user stopped a goal: drop its planning and reporting turns too, not only its tasks'. */
+  onGoalCancelled?(goal: Goal): void;
   /** How far this repository's lead and workers may reach right now (see capabilities.ts). */
   capabilitiesFor?(repoId: string): { lead: AgentCapabilities; worker: AgentCapabilities };
 }
@@ -421,7 +423,10 @@ export class Foreman {
         this.bus.feed('goal', `Goal closed: every task was cancelled or rejected (${truncate(g.text, 80)})`);
         return;
       }
-      if (g.status === 'cancelled' && live.length) this.setGoal(goalId, { status: 'active' });
+      // A cancelled goal comes back only when there is unfinished work again. Reviving it on any
+      // task that is merely not cancelled brought a goal the user had just stopped straight back:
+      // its finished tasks counted as work in progress, and the next pass marked it done.
+      if (g.status === 'cancelled' && all.some((t) => t.status !== 'cancelled' && t.status !== 'done')) this.setGoal(goalId, { status: 'active' });
       // progress stays 0 while the lead is still planning (avoids a jittering ring)
       if (g.status === 'cancelled' || g.status === 'failed' || g.status === 'planning') return;
       const progress = this.tasks.progress(goalId);
@@ -879,6 +884,25 @@ export class Foreman {
       }
       case 'goal.action': {
         const dead = (g: Goal) => g.status === 'done' || g.status === 'cancelled' || g.status === 'failed';
+        const unfinished = (g: Goal) => this.tasks.list().filter((t) => t.goalId === g.id && t.status !== 'done' && t.status !== 'cancelled');
+        if (msg.action === 'cancel') {
+          // Stopping a goal has to stop the work under it. Cancelling the goal alone left its
+          // workers running turns against a goal nobody wanted any more, and left it un-removable
+          // because the board could still see live tasks on it.
+          const g = this.goal(msg.goalId ?? '');
+          if (!g) throw new ClientError(`no goal ${msg.goalId}`);
+          const live = unfinished(g);
+          for (const t of live) this.taskAction(t.id, 'cancel');
+          const already = dead(g);
+          if (!already) this.setGoal(g.id, { status: 'cancelled' });
+          this.backend?.onGoalCancelled?.(this.goal(g.id) ?? g);
+          const line = already && !live.length
+            ? `${g.id} was already ${g.status}; nothing to stop`
+            : `Stopped ${g.id} (${truncate(g.text, 48)})${live.length ? ` and its ${live.length} unfinished task(s): ${live.map((t) => t.id).join(', ')}` : ''}`;
+          this.bus.feed('goal', line, { agentId: 'user' });
+          this.emit(this.snapshot());
+          return { lines: [line], cancelled: live.length };
+        }
         const targets = msg.action === 'clear' ? this.goals().filter(dead) : [this.goal(msg.goalId ?? '')].filter((g): g is Goal => !!g);
         if (msg.action === 'remove' && !targets.length) throw new ClientError(`no goal ${msg.goalId}`);
         if (!targets.length) {
@@ -890,7 +914,7 @@ export class Foreman {
         let removed = 0;
         for (const g of targets) {
           if (!dead(g)) {
-            lines.push(`${g.id} is still ${g.status}; cancel it first (/task ... cancel, or let it finish)`);
+            lines.push(`${g.id} is still ${g.status}; stop it first (/goals stop ${g.id}, or let it finish)`);
             continue;
           }
           // Its tasks go with it. A task whose goal is gone is a card on the wall that belongs to
@@ -899,7 +923,7 @@ export class Foreman {
           const mine = this.tasks.list().filter((t) => t.goalId === g.id);
           const live = mine.filter((t) => t.status !== 'done' && t.status !== 'cancelled');
           if (live.length) {
-            lines.push(`${g.id} still has ${live.length} task(s) live (${live.map((t) => t.id).join(', ')}); cancel them first`);
+            lines.push(`${g.id} still has ${live.length} task(s) live (${live.map((t) => t.id).join(', ')}); stop them first (/goals stop ${g.id})`);
             continue;
           }
           this.store.data.tasks = this.store.data.tasks.filter((t) => t.goalId !== g.id);

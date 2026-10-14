@@ -12,6 +12,7 @@ import dev.agentcraft.client.foreman.Protocol.TaskStatus;
 import dev.agentcraft.client.foreman.Protocol.Worktree;
 import dev.agentcraft.client.foreman.Protocol.WorktreeStatus;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -40,7 +41,7 @@ public final class ConsoleCommands {
 
 	// ------------------------------------------------------------------ intents
 
-	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Model, Team, GoalAction, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
+	public sealed interface Intent permits Goal, Message, Answer, RepoAdd, RepoFix, Permissions, Caps, Model, Team, GoalAction, GoalQueue, Artifacts, Notes, Dev, Repos, AgentAction, TaskAction, ShowDiff, Status, Help, Decide, Clear,
 		Sound, Invalid, Empty {
 	}
 
@@ -85,8 +86,16 @@ public final class ConsoleCommands {
 		@Nullable List<String> repos, @Nullable Integer floor, boolean disband) implements Intent {
 	}
 
-	/** Take finished goals off the board. {@code goalId} null with "clear" = every finished one. */
+	/**
+	 * Steer the goal queue. {@code action}: "cancel" stops one goal and every unfinished task
+	 * under it, "remove" takes one finished goal off the board with its tasks, "clear" every
+	 * finished one ({@code goalId} null).
+	 */
 	public record GoalAction(String action, @Nullable String goalId) implements Intent {
+	}
+
+	/** Open the goal queue. {@code goalId} null = the whole queue, else that goal selected. */
+	public record GoalQueue(@Nullable String goalId) implements Intent {
 	}
 
 	/** Open the library on the Artifacts tab. {@code id} null = the newest artifact. */
@@ -153,7 +162,7 @@ public final class ConsoleCommands {
 		new Command("permissions", "/permissions [ask|auto]", "prompt for permissions, or allow them"),
 		new Command("caps", "/caps [repo] [lead|worker] <full|all|none|...>", "how far a repo's agents may reach"),
 		new Command("model", "/model [lead|workers|<agent>] <model>", "which model an agent runs"),
-		new Command("goals", "/goals [clear | remove <id>]", "list goals, or take finished ones off the board"),
+		new Command("goals", "/goals [<id> | stop <id> | remove <id> | clear]", "the goal queue: see it, stop a goal, take finished ones off"),
 		new Command("team", "/team [<id> lead @agent [repos a,b] [with @a,@b] [floor n] | <id> disband]", "who works on what, and under whom"),
 		new Command("artifacts", "/artifacts [id]", "what the team finished, with its open items"),
 		new Command("notes", "/notes [folder] [search]", "read your own markdown folders (vault, docs)"),
@@ -322,23 +331,39 @@ public final class ConsoleCommands {
 			return false;
 		}
 		String a = args.get(0).toLowerCase(Locale.ROOT);
-		boolean one = (a.equals("remove") || a.equals("rm") || a.equals("delete")) && args.size() == 2 && args.get(1).matches("(?i)g\\d+");
-		return args.size() == 1 && (a.equals("clear") || a.equals("tidy") || a.equals("prune")) || one;
+		boolean one = GOAL_ONE_VERBS.contains(a) && args.size() == 2 && args.get(1).matches("(?i)g\\d+");
+		return args.size() == 1 && GOAL_ALL_VERBS.contains(a) || one;
 	}
 
-	/** {@code /goals} lists, {@code /goals clear} drops every finished one, {@code /goals remove g9} one. */
+	/** Verbs that act on every finished goal at once, and ones that need a goal id. */
+	private static final List<String> GOAL_ALL_VERBS = List.of("clear", "tidy", "prune");
+	private static final List<String> GOAL_ONE_VERBS = List.of("remove", "rm", "delete", "stop", "cancel");
+
+	/**
+	 * {@code /goals} opens the queue, {@code /goals g9} opens it on that goal, {@code /goals stop
+	 * g9} stops it and its unfinished tasks, {@code /goals remove g9} takes a finished one off,
+	 * {@code /goals clear} every finished one.
+	 */
 	private static Intent parseGoals(List<String> args) {
 		if (args.isEmpty()) {
-			return new Status();
+			return new GoalQueue(null);
 		}
 		String a = args.get(0).toLowerCase(Locale.ROOT);
-		if (a.equals("clear") || a.equals("tidy") || a.equals("prune")) {
+		if (GOAL_ALL_VERBS.contains(a)) {
 			return new GoalAction("clear", null);
 		}
-		if ((a.equals("remove") || a.equals("rm") || a.equals("delete")) && args.size() > 1) {
-			return new GoalAction("remove", args.get(1).toLowerCase(Locale.ROOT));
+		// a bare id is the common case from the completion list: show it, do not act on it
+		if (a.matches("g\\d+") && args.size() == 1) {
+			return new GoalQueue(a);
 		}
-		return new Invalid("usage: /goals [clear | remove <id>]");
+		if (GOAL_ONE_VERBS.contains(a) && args.size() > 1) {
+			String id = args.get(1).toLowerCase(Locale.ROOT);
+			return new GoalAction(a.equals("stop") || a.equals("cancel") ? "cancel" : "remove", id);
+		}
+		if (GOAL_ONE_VERBS.contains(a)) {
+			return new Invalid("which goal? /goals " + a + " <id> (/goals lists them)");
+		}
+		return new Invalid("usage: /goals [<id> | stop <id> | remove <id> | clear]");
 	}
 
 	/**
@@ -841,7 +866,9 @@ public final class ConsoleCommands {
 			case Caps c -> c.caps() == null ? "show what agents may reach"
 				: (c.role() == null ? "" : c.role() + " in ") + repoName(c.repoId(), s) + ": " + c.caps();
 			case Model md -> md.model() == null ? "show which model each agent runs" : md.who() + ": " + md.model();
-			case GoalAction ga -> ga.goalId() == null ? "clear every finished goal" : "remove " + ga.goalId();
+			case GoalAction ga -> ga.goalId() == null ? "clear every finished goal"
+				: ga.action().equals("cancel") ? "stop " + ga.goalId() + " and its unfinished tasks" : "remove " + ga.goalId() + " and its tasks";
+			case GoalQueue gq -> gq.goalId() == null ? "open the goal queue" : "open the goal queue on " + gq.goalId();
 			case Team t -> t.teamId() == null ? "show the teams"
 				: t.disband() ? "disband " + t.teamId()
 				: (t.lead() != null ? t.teamId() + " under " + displayName(t.lead(), s) : "change " + t.teamId())
@@ -973,6 +1000,26 @@ public final class ConsoleCommands {
 					}
 				} else if (argIndex == 3 && before.get(2).equalsIgnoreCase("reassign")) {
 					agentCompletions(out, ts, cursor, lower.startsWith("@") ? lower.substring(1) : lower, s, false, "");
+				}
+			}
+			case "/goals", "/goal" -> {
+				// only /goals completes: /goal is how a goal is typed, and a goal starting with
+				// the word "stop" must not turn into a command behind the user's back
+				if (cmd.equals("/goals") && argIndex == 1) {
+					for (String a : GOAL_ONE_VERBS.subList(3, GOAL_ONE_VERBS.size())) {
+						if (a.startsWith(lower)) {
+							out.add(new Completion(ts, cursor, a + " ", a, "stop a goal and every unfinished task under it", null, null));
+						}
+					}
+					if ("remove".startsWith(lower)) {
+						out.add(new Completion(ts, cursor, "remove ", "remove", "take a finished goal off the board, with its tasks", null, null));
+					}
+					if ("clear".startsWith(lower)) {
+						out.add(new Completion(ts, cursor, "clear", "clear", "take every finished goal off the board", null, null));
+					}
+				}
+				if (cmd.equals("/goals") && (argIndex == 1 || argIndex == 2 && GOAL_ONE_VERBS.contains(before.get(1).toLowerCase(Locale.ROOT)))) {
+					goalCompletions(out, ts, cursor, lower, s);
 				}
 			}
 			case "/repo" -> {
@@ -1133,6 +1180,25 @@ public final class ConsoleCommands {
 			if (t.id().toLowerCase(Locale.ROOT).startsWith(prefix)) {
 				out.add(new Completion(start, end, t.id() + " ", t.id(), oneLine(t.title(), 40), t.assignee(), null));
 			}
+		}
+	}
+
+	/** Every goal, newest first, with its status and how much of it is left: the queue, as a list. */
+	private static void goalCompletions(List<Completion> out, int start, int end, String prefix, ForemanState s) {
+		List<Protocol.Goal> goals = new ArrayList<>(s.goals().values());
+		Collections.reverse(goals);
+		for (Protocol.Goal g : goals) {
+			if (!g.id().toLowerCase(Locale.ROOT).startsWith(prefix)) {
+				continue;
+			}
+			int live = 0;
+			for (Task t : s.tasks().values()) {
+				if (g.id().equals(t.goalId()) && t.status() != TaskStatus.DONE && t.status() != TaskStatus.CANCELLED) {
+					live++;
+				}
+			}
+			String note = g.status().wire() + (live > 0 ? " \u00b7 " + live + " live" : "");
+			out.add(new Completion(start, end, g.id() + " ", g.id(), oneLine(g.text(), 40), null, note));
 		}
 	}
 

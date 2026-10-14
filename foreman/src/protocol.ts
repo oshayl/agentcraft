@@ -520,8 +520,12 @@ export const CapsSetMsg = z.object({
 
 export const GoalActionMsg = z.object({
   ...envelope('goal.action'),
-  action: z.enum(['remove', 'clear']).describe("'remove' one goal; 'clear' every goal that is finished with (done, cancelled or failed)"),
-  goalId: Id.optional().describe("required for 'remove'; ignored by 'clear'"),
+  action: z
+    .enum(['remove', 'clear', 'cancel'])
+    .describe(
+      "'cancel' stop one goal and every unfinished task under it; 'remove' take one finished goal off the board with its tasks; 'clear' every goal that is finished with (done, cancelled or failed)",
+    ),
+  goalId: Id.optional().describe("required for 'remove' and 'cancel'; ignored by 'clear'"),
 });
 
 export const TeamSetMsg = z.object({
@@ -635,7 +639,10 @@ export const CLIENT_MESSAGES = {
   'repo.add': { schema: RepoAddMsg, doc: 'Register a local git repo (console: `/repo add <path>`).' },
   'goal.action': {
     schema: GoalActionMsg,
-    doc: 'Take finished goals off the board (console: `/goals clear`, `/goals remove g9`). The goal and its tasks go together; a goal still planning or active is refused, as is one with work still live under it.',
+    doc:
+      'Stop a goal, or take finished ones off the board (console: `/goals`, `/goals stop g9`, `/goals remove g9`, `/goals clear`). ' +
+      'The goal and its tasks go together: `cancel` stops every unfinished task under it, and `remove` deletes them with it. ' +
+      'Removing a goal that is still planning or active is refused, as is one with work still live under it — stop it first.',
   },
   'team.set': {
     schema: TeamSetMsg,

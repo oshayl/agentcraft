@@ -28,6 +28,7 @@ was verified in game in Phase 2 (`artifacts/shots/phase2_*.png`).
 | `client.hud` | hud specialist | connection banner (done), goal boss bar, in-game toasts |
 | `client.monitor` | monitor specialist | `MonitorRenderer` (BER): live agent log on desk monitors |
 | `client.taskwall` | task wall specialist | `TaskBoardRenderer` (BER): kanban cards |
+| `client.goals` | goals specialist | the goal queue screen on the Goal Atrium's plinth |
 | `client.decisions` | decisions specialist | `DecisionPodiumRenderer` + decision GUI |
 | `client.console` | console specialist | console screen + keybind, `ConsoleTerminalRenderer` |
 | `client.diff` | diff specialist | diff/merge review screen, `MergeStationRenderer` |
@@ -497,6 +498,25 @@ hidden.
   (builds a bay far from any HQ, around x=1000 z=1000, with the HQ's sizes: a 7x4 east-facing wall
   and three 3x2 monitors, framed like the HQ cameras; its setup clears that box), `node tools/shoot.mjs <scene> --port <dev> --foreman <port>`.
 
+## Goal queue (`client.goals`)
+
+**Goal queue** (`GoalsFeature`, `GoalScreen`): every goal the team has been given, newest first,
+behind the one the Goal Atrium's hologram shows. Right-click the atrium plinth (the status lamp
+bound `goal:atrium` — the hologram itself floats 3.55 blocks up and is not a block, so there is
+nothing up there to click) or type `/goals`.
+- **Rows**: status dot + id + status (Planning / Going / Done / Failed / Stopped), the owning
+  repo on the right, the goal's text, the Foreman's progress bar and the tally it is made of
+  (`36/47 done · 6 live · 5 stopped`). Click a row to open its actions.
+- **Actions** (`goal.action`, answer shown in place): **Stop goal** cancels the goal and every
+  unfinished task under it, leaving the finished work on the board; **Remove** takes a finished
+  goal off for good, with its tasks; **Clear finished** in the header does that for all of them.
+  Each arms on the first press (one clay primary, a prompt naming what goes, lapsing after 5 s)
+  and sends on the second, like the task card's Stop.
+- Remove is off while anything is live, and says so when clicked: it names Stop goal as the way
+  through rather than going quiet.
+- Dev: `dev.screen {open:"goals"}`, `dev.goals {open?: goalId, press?: button}` (the queue as the
+  screen reads it, with the button rects; press `open:<goal>` / `stop` / `remove` / `clear`).
+
 Drawing helpers shared by both (`client.monitor.DisplayDraw`): opaque flat rects/gradients in one
 custom-geometry node per screen (a 4x4 white `DynamicTexture` on a no-blend copy of the world text
 pipeline), z-aware nine-slice with the kit card's translucent shadow row trimmed, opaque portrait
@@ -509,7 +529,7 @@ and ~42 us/frame for all boards, extract + submit, rebuilds included; a full boa
 
 - Screens: `DevBridge.registerScreen("console", mc -> new ConsoleScreen())` in your `init()`, then
   `dev.screen {open:"console"}` (or a scene shot with `"screen":"console"`). Names in use or reserved:
-  `console`, `diff`, `decision`, `library`, `permission`, `task`, `creative_agentcraft`.
+  `console`, `diff`, `decision`, `library`, `permission`, `task`, `goals`, `creative_agentcraft`.
 - Cameras: add `cam_<name>` anchors in the HQ builder and shoot with `dev.camera {anchor}`.
 - State: `dev.state` has `foreman` (link, backend, auth, counts, goal) and `agents` (count, moving);
   `dev.foreman` (+ `reconnect:true`), `dev.foreman.send {message:{type,...}}` (drive the Foreman

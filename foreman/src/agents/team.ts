@@ -1658,6 +1658,20 @@ export class TeamBackend implements Backend {
     return true;
   }
 
+  /**
+   * The user stopped a goal. Its tasks were cancelled one by one before this (so their turns are
+   * already gone); what is left is the lead's own work on the goal — the plan turn that would
+   * write more tasks for it, and the report turn at the end. Without this the lead planned on
+   * against a goal nobody wanted, and put fresh tasks on a board the user had just cleared.
+   */
+  onGoalCancelled(goal: Goal): void {
+    for (const [, r] of this.running) {
+      if (r.job.goalId === goal.id) this.abortTurn(r, 'cancel');
+    }
+    for (const [id, q] of this.queues) this.queues.set(id, q.filter((j) => j.goalId !== goal.id));
+    this.tick();
+  }
+
   onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void {
     if (action === 'cancel' || action === 'reassign') {
       for (const [id, r] of this.running) {

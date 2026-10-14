@@ -36,10 +36,12 @@ back the next time it opens (this session), and the console terminal shows it on
 | `/pause @x`, `/resume @x`, `/stop @x` (also `all`), `/spawn @x [task]` | `agent.action` |
 | `/task <id> cancel\|retry\|prioritize [n]\|reassign @x` | `task.action` |
 | `/diff [worktree\|@agent\|task]` | opens the diff screen (`diff`, owned by the diff feature); without one, prints a file summary from `diff.request` |
+| `/goals [<id>]` | opens the goal queue (`goals`, owned by the goals feature) |
+| `/goals stop <id>`, `/goals remove <id>`, `/goals clear` | `goal.action`; `stop` cancels a goal and every unfinished task under it, `remove` deletes a finished one with its tasks, `clear` every finished one |
 | `/status`, `/help`, `/decide`, `/clear`, `/sound on\|off` | local |
 
-Tab completes agent names (also after `/pause` etc.), commands, decision ids and options, task ids
-and worktrees; repeated Tab cycles, Up/Down move in the popup. Up/Down otherwise walk the history
+Tab completes agent names (also after `/pause` etc.), commands, decision ids and options, task ids,
+goal ids (with their status and how much is still live) and worktrees; repeated Tab cycles, Up/Down move in the popup. Up/Down otherwise walk the history
 (kept in `<game dir>/agentcraft/console-history.txt`). Shift+Enter adds a line; a multi-line
 paste grows the bar (up to 6 lines, then it scrolls).
 

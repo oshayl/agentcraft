@@ -6,6 +6,7 @@ import dev.agentcraft.client.console.ConsoleFeature;
 import dev.agentcraft.client.decisions.DecisionsFeature;
 import dev.agentcraft.client.diff.DiffFeature;
 import dev.agentcraft.client.foreman.ForemanFeature;
+import dev.agentcraft.client.goals.GoalsFeature;
 import dev.agentcraft.client.hq.HqClientFeature;
 import dev.agentcraft.client.hud.HudFeature;
 import dev.agentcraft.client.library.LibraryFeature;
@@ -35,6 +36,7 @@ public final class ClientFeatures {
 		HqClientFeature.init();  // lamps / podium / atrium driven by state (Phase 3)
 		MonitorFeature.init();
 		TaskWallFeature.init();
+		GoalsFeature.init();   // the goal queue on the atrium plinth (dev.goals)
 		DecisionsFeature.init();
 		ConsoleFeature.init();
 		DiffFeature.init();
