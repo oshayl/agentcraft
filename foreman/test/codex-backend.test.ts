@@ -4,13 +4,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CodexEngine } from '../src/agents/codex/engine.js';
 import { shellCommand } from '../src/agents/codex/stream.js';
 import { TeamBackend } from '../src/agents/team.js';
 import { demoRepo, makeForeman, rmrf, tempDir, until, type Harness } from './helpers.js';
 
-const FAKE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'fixtures', 'fake-codex.mjs');
+const FAKE = fileURLToPath(new URL('./fixtures/fake-codex.mjs', import.meta.url));
 const OUTSIDE = path.join(os.homedir(), 'agentcraft-codex-test-outside.txt');
 
 const scenario = {
