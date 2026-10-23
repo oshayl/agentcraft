@@ -8,7 +8,7 @@ import { formatInbox } from '../bus.js';
 import type { Foreman } from '../foreman.js';
 import { ARTIFACT_SCOPE } from '../memory.js';
 import { renderArtifact } from '../artifacts.js';
-import type { AgentState, Decision, TaskStatus } from '../protocol.js';
+import type { AgentState, Decision, Task, TaskStatus } from '../protocol.js';
 import { MERGE_OPTIONS } from '../protocol.js';
 import { isPrBranch } from '../pulls.js';
 import { truncate } from '../util/text.js';
@@ -40,6 +40,11 @@ export interface TurnHandle {
   waitingOnUser(): () => void;
 }
 
+/** The job that owns these tools, independent of goals submitted while its turn runs. */
+export interface ToolContext {
+  goalId?: string;
+}
+
 export type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
 
 /** One team tool: an engine exposes it under `name` with `shape` as its input schema. */
@@ -61,18 +66,41 @@ function tool<S extends z.ZodRawShape>(name: string, description: string, shape:
   return { name, description, shape, handler };
 }
 
+/** Task and goal records mutate in place while git runs; retain the ownership we reviewed. */
+function reviewSnapshot(fm: Foreman, task: Task): (status?: TaskStatus) => boolean {
+  const { id, assignee, repoId, worktree, goalId, teamId } = task;
+  const goal = goalId ? fm.goal(goalId) : undefined;
+  const goalRepoId = goal?.repoId;
+  const goalTeamId = goal?.teamId;
+  return (status = 'review') => {
+    const current = fm.tasks.get(id);
+    const currentGoal = goalId ? fm.goal(goalId) : undefined;
+    return !!current && current.status === status && current.assignee === assignee
+      && current.repoId === repoId && current.worktree === worktree && current.goalId === goalId && current.teamId === teamId
+      && (!goalId || (!!currentGoal && !['cancelled', 'failed'].includes(currentGoal.status) && (status === 'done' || currentGoal.status !== 'done')
+        && currentGoal.repoId === goalRepoId && currentGoal.teamId === goalTeamId));
+  };
+}
+
 /**
  * A task in review whose worktree changed nothing (a report, an investigation): there is nothing
  * to merge, so it is closed as done (worktree abandoned, branch kept) instead of asking the user to
  * approve an empty merge. Returns true if it was closed.
  */
-export async function closeIfNoChanges(fm: Foreman, taskId: string): Promise<boolean> {
+export async function closeIfNoChanges(fm: Foreman, taskId: string, allowed: () => boolean = () => true): Promise<boolean> {
   const t = fm.tasks.get(taskId);
   if (!t || t.status !== 'review' || !t.repoId || !t.worktree) return false;
-  await fm.repos.refresh(t.repoId);
-  const wt = fm.repos.findWorktree(t.repoId, t.worktree);
-  if (!wt || wt.status !== 'active' || wt.files > 0) return false;
-  await fm.repos.abandon(t.repoId, wt.id, `agentcraft: ${t.id} (no changes)`);
+  const current = reviewSnapshot(fm, t);
+  const { repoId, worktree } = t;
+  if (!allowed() || !current()) return false;
+  await fm.repos.refresh(repoId);
+  if (!allowed() || !current()) return false;
+  const wt = fm.repos.findWorktree(repoId, worktree);
+  if (!wt || !['active', 'abandoned'].includes(wt.status) || wt.files > 0) return false;
+  // A pause can arrive after abandonment starts removing the empty tree. A fresh review can
+  // finish that close without trying to merge or abandon the already-removed tree again.
+  if (wt.status === 'active') await fm.repos.abandon(repoId, wt.id, `agentcraft: ${t.id} (no changes)`);
+  if (!allowed() || !current()) return false;
   fm.tasks.setStatus(t.id, 'done', { force: true, summary: t.summary ?? 'no changes' });
   fm.bus.feed('task', `${t.id} changed no files (report only): closed as done, nothing to merge`, { agentId: t.assignee ?? 'marlow' });
   if (t.assignee && fm.agent(t.assignee)?.taskId === t.id) fm.setAgent(t.assignee, { state: 'idle', station: 'lounge', activity: `${t.id} done`, taskId: null, worktree: null });
@@ -80,7 +108,11 @@ export async function closeIfNoChanges(fm: Foreman, taskId: string): Promise<boo
 }
 
 /** The team tools for one agent's turn (lead: also create_task and request_merge). */
-export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker', hooks: ToolHooks, turn?: TurnHandle): AgentTool[] {
+export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker', hooks: ToolHooks, turn?: TurnHandle, context?: ToolContext): AgentTool[] {
+  // Older callers without a job context get a snapshot too. Looking up the newest goal from a
+  // handler files the first goal's tasks in the second goal's repository when their turns overlap.
+  const goalId = context ? context.goalId : fm.currentGoalFor(fm.teamOf(agentId).id)?.id;
+  const repoId = goalId ? fm.goal(goalId)?.repoId : undefined;
   const withInbox = (text: string, isError = false): ToolResult => {
     const inbox = fm.bus.inbox(agentId, { markRead: true });
     const extra = inbox.length ? `\n\n[New messages]\n${formatInbox(inbox, (id) => fm.nameOf(id))}` : '';
@@ -95,7 +127,7 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
       { to: z.string().describe('agent id/name, "lead", "all" or "user"'), text: z.string().describe('the message (1-3 sentences)') },
       async ({ to, text }) => {
         let target = to.trim().toLowerCase();
-        if (target === 'lead') target = 'marlow';
+        if (target === 'lead') target = fm.teamOf(agentId).lead;
         if (!['all', 'user'].includes(target)) {
           const id = fm.resolveAgentId(target);
           if (!id) return fail(`no teammate "${to}". Team: ${fm.agents().filter((a) => a.active).map((a) => a.id).join(', ')}`);
@@ -221,7 +253,7 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
         if (role === 'worker') {
           const current = fm.agent(agentId)?.taskId;
           if (t.assignee !== agentId) return fail(`${t.id} is not your task`);
-          if (current && t.id !== current) return fail(`you are working on ${current}; you can only update that task. Tell Marlow (send_message to "lead") if ${t.id} is already covered.`);
+          if (current && t.id !== current) return fail(`you are working on ${current}; you can only update that task. Tell your lead (send_message to "lead") if ${t.id} is already covered.`);
           if (a.status && !['review', 'blocked', 'doing'].includes(a.status)) return fail('workers can set status review, blocked or doing');
           if (a.assignee || a.title || a.description || a.deps) return fail('only the lead can change assignee/title/description/deps');
         }
@@ -292,7 +324,9 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
           goal_id: z.string().optional(),
         },
         async ({ title, summary, open_items, done, notes, id, goal_id }) => {
-          const goal = goal_id ? fm.goal(goal_id) : fm.currentGoalFor(fm.teamOf(agentId).id);
+          const artifactGoalId = goal_id ?? goalId;
+          const goal = artifactGoalId ? fm.goal(artifactGoalId) : undefined;
+          if (artifactGoalId && !goal) return fail(`no goal ${artifactGoalId}; this turn cannot switch to another goal`);
           const body = renderArtifact({ title, summary, openItems: open_items, done: done ?? [], ...(notes ? { notes } : {}), ...(goal ? { goal } : {}) });
           const slug = id ? id.replace(`${ARTIFACT_SCOPE}/`, '') : undefined;
           const e = fm.memory.write({ scope: ARTIFACT_SCOPE, title, body, author: agentId, ...(slug ? { slug } : {}) });
@@ -314,7 +348,9 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
         },
         async ({ title, description, deps, assignee, priority, start_branch }) => {
           const team = fm.teamOf(agentId);
-          const goal = fm.currentGoalFor(team.id);
+          const goal = goalId ? fm.goal(goalId) : undefined;
+          if (goalId && !goal) return fail(`no goal ${goalId}; this turn cannot create more work`);
+          if (goal && ['done', 'cancelled', 'failed'].includes(goal.status)) return fail(`goal ${goal.id} is ${goal.status}; this turn cannot create more work`);
           if (start_branch && !isPrBranch(start_branch)) return fail(`start_branch must be a fetched pull request branch (agentcraft/pr-<n>), not ${start_branch}`);
           let who: string | undefined;
           if (assignee) {
@@ -334,7 +370,7 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
               ...(start_branch ? { startBranch: start_branch } : {}),
               createdBy: agentId,
               ...(goal ? { goalId: goal.id } : {}),
-              ...(goal?.repoId ? { repoId: goal.repoId } : {}),
+              ...(repoId ? { repoId } : {}),
               teamId: team.id,
             });
             fm.bus.feed('task', `${fm.nameOf(agentId)} created ${t.id}: ${t.title}`, { agentId });
@@ -354,13 +390,24 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
           if (!t) return fail(`no task ${task_id}`);
           if (t.status !== 'review') return fail(`${t.id} is ${t.status}, not in review`);
           if (!t.worktree || !t.repoId) return fail(`${t.id} has no worktree to merge`);
+          const current = reviewSnapshot(fm, t);
+          const { repoId, worktree } = t;
+          const allowed = () => !turn?.signal.aborted;
+          if (!current()) return fail(`${t.id}'s review is no longer current`);
           const open = fm.decisions.open().find((d) => d.kind === 'merge' && d.taskId === t.id);
           if (open) return withInbox(`Merge decision ${open.id} for ${t.id} is already waiting for ${userName()}.`);
-          if (await closeIfNoChanges(fm, t.id)) {
+          if (await closeIfNoChanges(fm, t.id, () => allowed() && current())) {
+            // Closing the task changes its status and may finish its goal. The helper has already
+            // checked ownership immediately before that synchronous change.
+            if (!allowed() || !current('done')) return fail(`${t.id}'s review was stopped or changed`);
             hooks.onTasksChanged();
             return withInbox(`${t.id} changed no files, so there is nothing to merge: it is closed as done. Tell ${userName()} the result with send_message if you have not yet.`);
           }
-          const wt = fm.repos.requireWorktree(t.repoId, t.worktree);
+          if (!allowed() || !current()) return fail(`${t.id}'s review was stopped or changed`);
+          const wt = fm.repos.requireWorktree(repoId, worktree);
+          if (wt.status !== 'active') return fail(`${t.id}'s worktree is no longer active`);
+          const pending = fm.decisions.open().find((d) => d.kind === 'merge' && d.taskId === t.id);
+          if (pending) return withInbox(`Merge decision ${pending.id} for ${t.id} is already waiting for ${userName()}.`);
           const d = fm.createDecision({
             agentId,
             kind: 'merge',
@@ -368,7 +415,7 @@ export function agentTools(fm: Foreman, agentId: string, role: 'lead' | 'worker'
             options: [...MERGE_OPTIONS],
             context: `${summary}\n${wt.files} files, +${wt.additions} -${wt.deletions} | tests: ${t.ci}`,
             taskId: t.id,
-            repoId: t.repoId,
+            repoId,
             worktree: wt.id,
           });
           hooks.onMergeRequested(t.id, d);

@@ -1,26 +1,19 @@
-// "Always allow for this agent" must be able to stick.
-//
-// Every heredoc is different text, so an exact-command grant never matched a second time: 311
-// prompts were answered, 236 dead keys were banked, and the agents stood waiting 11 hours. The
-// work was always the same shape, so it gets a key of that shape - but only where the snippet
-// plainly cannot leave the worktree, because for a Claude worker there is no sandbox underneath
-// and this check is the whole boundary.
+// Inline code can construct paths and method names at runtime; a string scan cannot confine it.
+// In particular, an old "Always allow" grant must not let new snippets write to read-only
+// memory/library directories or follow relative symlinks out of the worktree.
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { classifyToolUse, describeRuleKey, type PolicyContext, type Verdict } from '../src/policy.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { classifyToolUse, describeRuleKey, exactKey, type PolicyContext, type Verdict } from '../src/policy.js';
 
 const wt = path.join(os.tmpdir(), 'ac-policy', 'worktrees', 'demo-app', 'ash-t76');
 const worker: PolicyContext = { role: 'worker', cwd: wt, tempDirs: [] };
-const lead: PolicyContext = { role: 'lead', cwd: wt, tempDirs: [] };
-const KEY = 'Bash:inline-write';
-
+const LEGACY_KEY = 'Bash:inline-write';
 const verdict = (command: string, ctx: PolicyContext = worker) => classifyToolUse('Bash', { command }, ctx);
-/** rule keys, which only an 'ask' carries */
 const keys = (v: Verdict): string[] => (v.action === 'ask' ? v.ruleKeys : []);
-const granted = (command: string) => classifyToolUse('Bash', { command }, { ...worker, alwaysAllow: [KEY] });
+const legacyGranted = (command: string, ctx: PolicyContext = worker) => verdict(command, { ...ctx, alwaysAllow: [LEGACY_KEY] });
 
-// the real one out of Bryn's log, shortened
 const heredoc = `python3 - <<'EOF'
 def sub(p, pairs):
     s = open(p).read()
@@ -30,54 +23,91 @@ def sub(p, pairs):
 sub('docs/ci-and-smoke.md', [("before", "after")])
 EOF`;
 
-describe('inline code that only edits the worktree', () => {
-  it('asks once with a key that can be granted', () => {
-    const v = verdict(heredoc);
-    expect(v.action).toBe('ask');
-    expect(keys(v)).toContain(KEY);
-    expect(keys(v).some((k) => k.startsWith('Bash:exact:'))).toBe(false);
+describe('exact inline-code approvals', () => {
+  it('asks for the exact snippet even when its visible paths are inside the worktree', () => {
+    expect(keys(verdict(heredoc))).toEqual([exactKey(heredoc)]);
+    expect(legacyGranted(heredoc).action).toBe('ask');
   });
 
-  it('stops asking once that key is granted', () => {
-    expect(granted(heredoc).action).toBe('allow');
+  it('honors approval for that command without covering another snippet', () => {
+    const ctx = { ...worker, alwaysAllow: [LEGACY_KEY, exactKey(heredoc)] };
+    expect(verdict(heredoc, ctx).action).toBe('allow');
+    const other = `python3 -c "open('src/app.ts','w').write('new')"`;
+    expect(keys(verdict(other, ctx))).toEqual([exactKey(other)]);
   });
 
-  it('covers the next snippet too, which is the whole point', () => {
-    const other = `python3 - <<'EOF'\np = 'src/app.ts'\nopen(p, 'w').write(open(p).read().replace('a', 'b'))\nEOF`;
-    expect(keys(verdict(other))).toContain(KEY);
-    expect(granted(other).action).toBe('allow');
+  it('identifies the obsolete persisted grant', () => {
+    expect(describeRuleKey(LEGACY_KEY)).toBe('legacy inline-script grant (no longer used)');
   });
 
-  it('says in plain words what it covers', () => {
-    expect(describeRuleKey(KEY)).toBe('inline scripts that change files inside this worktree');
+  it.each([
+    ['Python -c', `python3 -c "print('hello')"`],
+    ['Node --eval', `node --eval "console.log('hello')"`],
+    ['Node --print', `node --print "1 + 1"`],
+    ['Python heredoc', "python3 - <<'EOF'\nprint('hello')\nEOF"],
+    ['Python here-string', `python3 <<< "print('hello')"`],
+    ['Node pipeline', `echo "console.log('hello')" | node`],
+    ['nested shell', `bash -c 'python3 -c "print(1)"'`],
+  ])('requires exact approval for %s, including apparently read-only code', (_label, command) => {
+    expect(keys(legacyGranted(command))).toEqual([exactKey(command)]);
   });
 });
 
-describe('what the grant must never cover', () => {
-  const refuses = (label: string, command: string) =>
-    it(label, () => {
-      const v = verdict(command);
-      expect(v.action).not.toBe('allow');
-      expect(keys(v)).not.toContain(KEY);
-      // still granted one command at a time
-      if (v.action === 'ask') expect(keys(v).some((k) => k.startsWith('Bash:exact:'))).toBe(true);
-      expect(granted(command).action).not.toBe('allow');
-    });
+describe('the legacy grant never authorizes writes', () => {
+  it.each([
+    ['an absolute outside path', `python3 -c "open('${path.join(os.tmpdir(), 'ac-policy', 'elsewhere', 'x')}','w').write('x')"`],
+    ['a home path', `python3 -c "open('~/.ssh/authorized_keys','w').write('k')"`],
+    ['relative parent traversal', `python3 -c "open('../../../../elsewhere/secret.txt','w').write('x')"`],
+    ['an unrecognized absolute root', `python3 -c "open('/private/other/file','w').write('x')"`],
+    ['an absolute temp path', `python3 -c "open('/tmp/other-file','w').write('x')"`],
+    ['a computed path', `python3 -c "p = chr(47) + 'private' + chr(47) + 'file'; open(p,'w').write('x')"`],
+    ['a computed write method', `node -e "require('fs')['write' + 'FileSync']('file','x')"`],
+    ['an imported module with unknown effects', `python3 -c "import local_module"`],
+    ['a process', `python3 -c "import subprocess; subprocess.run(['rm','-rf','/'])"`],
+    ['network access', `node -e "fetch('https://example.com').then(r=>r.text())"`],
+    ['a socket', `python3 -c "import socket; socket.socket().connect(('10.0.0.1',22))"`],
+    ['runtime code', `node -e "eval(process.argv[1])"`],
+    ['a path from arguments', `python3 -c "import sys; open(sys.argv[1],'w').write('x')"`],
+  ])('asks for exact approval for %s', (_label, command) => {
+    expect(keys(legacyGranted(command))).toEqual([exactKey(command)]);
+  });
 
-  refuses('writing a file outside the worktree', `python3 -c "open('${path.join(os.tmpdir(), 'ac-policy', 'elsewhere', 'x')}','w').write('x')"`);
-  refuses('writing through the home directory', `python3 -c "open('~/.ssh/authorized_keys','w').write('k')"`);
-  refuses('climbing out with ..', `python3 -c "open('../../../../elsewhere/secret.txt','w').write('x')"`);
-  refuses('starting a process', `python3 -c "import subprocess; subprocess.run(['rm','-rf','/'])"`);
-  refuses('reaching the network', `node -e "fetch('https://example.com').then(r=>r.text())"`);
-  refuses('opening a socket', `python3 -c "import socket; socket.socket().connect(('10.0.0.1',22))"`);
-  refuses('building code at runtime', `node -e "eval(process.argv[1])"`);
-  refuses('a path it never names, so nothing can be checked', `python3 -c "import sys; open(sys.argv[1],'w').write('x')"`);
-});
+  it.each(['memory', 'library'])('keeps %s readable without allowing inline writes', (dir) => {
+    const readDir = path.join(os.tmpdir(), 'ac-policy', dir);
+    const file = path.join(readDir, 'note.md');
+    const ctx: PolicyContext = { ...worker, readDirs: [readDir] };
+    expect(classifyToolUse('Read', { file_path: file }, ctx).action).toBe('allow');
+    expect(classifyToolUse('Write', { file_path: file, content: 'x' }, ctx).action).toBe('ask');
+    const command = `python3 -c "open('${file}','w').write('x')"`;
+    expect(keys(legacyGranted(command, ctx))).toEqual([exactKey(command)]);
+  });
 
-describe('the lead', () => {
-  it('never gets the grant: it works in the user own checkout, not a worktree', () => {
-    const v = verdict(heredoc, lead);
-    expect(keys(v)).not.toContain(KEY);
-    expect(classifyToolUse('Bash', { command: heredoc }, { ...lead, alwaysAllow: [KEY] }).action).not.toBe('allow');
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not authorize a relative write through a symlink outside the worktree', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-inline-policy-'));
+    roots.push(root);
+    const cwd = path.join(root, 'worktree');
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(cwd);
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(cwd, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    const ctx = { ...worker, cwd };
+    expect(classifyToolUse('Write', { file_path: 'linked/file.txt', content: 'x' }, ctx).action).toBe('ask');
+    const command = `python3 -c "open('linked/file.txt','w').write('x')"`;
+    expect(keys(legacyGranted(command, ctx))).toEqual([exactKey(command)]);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
+  it('still refuses a recognizable push even if its exact command was approved', () => {
+    const command = `node -e "require('child_process').execSync('git push')"`;
+    expect(verdict(command, { ...worker, alwaysAllow: [LEGACY_KEY, exactKey(command)] }).action).toBe('deny');
+  });
+
+  it('also requires exact approval for a lead', () => {
+    expect(keys(legacyGranted(heredoc, { ...worker, role: 'lead' }))).toEqual([`lead:${exactKey(heredoc)}`]);
   });
 });

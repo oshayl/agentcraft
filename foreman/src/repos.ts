@@ -23,7 +23,7 @@ import type { CiStatus, Decision, Repo, Worktree } from './protocol.js';
 import { withGitSafety } from './gitsafety.js';
 import { ensureDir, isInsideOrEqual } from './util/fsx.js';
 import { agentGitIdentity, git, gitConfigGet, gitOut, identityEnv, listWorktrees } from './util/git.js';
-import { runShell } from './util/proc.js';
+import { run, runShell } from './util/proc.js';
 import { slugify, tailLines } from './util/text.js';
 
 /**
@@ -323,7 +323,9 @@ export class RepoManager {
 
   /** The checkout holding this repo's base branch: the one a merge actually refuses on. */
   private async baseCheckout(r: Repo): Promise<string> {
-    return (await this.checkoutOf(r, r.branch)) ?? r.path;
+    const checkout = await this.checkoutOf(r, r.branch);
+    if (!checkout) throw new RepoError(`${r.branch} is not checked out; check it out before fixing its uncommitted work or dependencies`, 'refused');
+    return checkout;
   }
 
   /** What currently blocks work in this repo, in the order the user would hit it. */
@@ -491,9 +493,14 @@ export class RepoManager {
     for (const w of stale) {
       const dest = path.join(w.path, 'node_modules');
       fs.rmSync(dest, { recursive: true, force: true });
-      const cp = await runShell(`cp -c -R ${JSON.stringify(src)} ${JSON.stringify(dest)} 2>/dev/null || cp -R ${JSON.stringify(src)} ${JSON.stringify(dest)}`, {
-        cwd: w.path,
-      });
+      // Paths are data: shell double quotes still expand $() and ${...} in repository names.
+      let cp = await run('cp', ['-c', '-R', src, dest], { cwd: w.path });
+      if (cp.code !== 0) {
+        // A failed clone may have left part of the destination behind. Copy into a fresh path
+        // rather than nesting node_modules inside that partial copy.
+        fs.rmSync(dest, { recursive: true, force: true });
+        cp = await run('cp', ['-R', src, dest], { cwd: w.path });
+      }
       if (cp.code === 0) done.push(w.id);
     }
     return done.length ? `dependencies restored in: ${done.join(', ')}` : 'could not copy dependencies';
@@ -817,7 +824,7 @@ export class RepoManager {
   }
 
   /**
-   * Files sitting untracked in the checkout that this branch also adds.
+   * Files sitting untracked (including ignored files) in the checkout that this branch adds.
    *
    * <p>Git refuses a merge that would overwrite an untracked file rather than clobber work it
    * has no record of, and says so in a way that stops the merge dead. This answers the same
@@ -836,19 +843,29 @@ export class RepoManager {
     // written the agent's files are usually still uncommitted, the collision looks like nothing,
     // and the option that handles it is never offered.
     const incoming = new Set(
-      (await gitOut(r.path, ['diff', '--name-only', `${w.base}...${w.branch}`])).split('\n').map((l) => l.trim()).filter(Boolean),
+      (await git(r.path, ['diff', '--name-only', '-z', `${w.base}...${w.branch}`])).stdout.split('\0').filter(Boolean),
     );
-    const pending = (await git(w.path, ['status', '--porcelain', '--untracked-files=all'], { allowFail: true })).stdout.split('\n');
-    for (const line of pending) {
-      const m = /^..\s+(?:.+ -> )?(.+)$/.exec(line);
-      if (m?.[1]) incoming.add(m[1].trim().replace(/^"|"$/g, ''));
-    }
+    const pending = await git(w.path, ['diff', '--name-only', '-z', 'HEAD'], { allowFail: true });
+    const added = await git(w.path, ['ls-files', '--others', '--exclude-standard', '-z'], { allowFail: true });
+    for (const name of (pending.stdout + added.stdout).split('\0').filter(Boolean)) incoming.add(name);
     if (!incoming.size) return [];
-    const untracked = (await git(target, ['ls-files', '--others', '--exclude-standard'], { allowFail: true })).stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
-    return untracked.filter((f) => incoming.has(f)).sort();
+    // Git normally overwrites ignored files during a merge. Include them here so the user can
+    // preserve them with the same explicit set-aside approval as other untracked work. NUL
+    // delimiters keep literal whitespace, newlines and quoted filenames intact.
+    // Limit the search to incoming paths and blocking parent files: scanning every ignored
+    // node_modules entry can exhaust the process-output limit before the collision is reached.
+    const candidates = new Set(incoming);
+    for (const name of incoming) {
+      for (let parent = path.posix.dirname(name); parent !== '.'; parent = path.posix.dirname(parent)) {
+        try {
+          if (!fs.lstatSync(path.join(target, parent)).isDirectory()) candidates.add(parent);
+        } catch {
+          /* A missing parent cannot contain local work that blocks this path. */
+        }
+      }
+    }
+    const untracked = await git(target, ['--literal-pathspecs', 'ls-files', '--others', '-z', '--', ...candidates]);
+    return untracked.stdout.split('\0').filter(Boolean).sort();
   }
 
   /**
@@ -929,7 +946,7 @@ export class RepoManager {
     // 4. apply: fast-forward the checkout that has base checked out, or move the ref if none does
     const target = await this.checkoutOf(r, w.base);
     if (target) {
-      const ff = await git(target, ['merge', '--ff-only', '-q', mergeSha], { allowFail: true });
+      const ff = await git(target, ['merge', '--ff-only', '--no-overwrite-ignore', '-q', mergeSha], { allowFail: true });
       if (ff.code !== 0) {
         throw new RepoError(`could not update ${target}: ${(ff.stderr || ff.stdout).trim().split('\n').slice(-2).join(' ')}`, 'refused');
       }
@@ -968,6 +985,9 @@ export class RepoManager {
     await this.commitAll(r.id, w.id, message ?? `agentcraft: ${w.taskId ?? w.id} (abandoned)`).catch((e: Error) => {
       tampered = e instanceof RepoError && e.message.startsWith(TAMPERED);
       this.ctx.log.warn(`abandon ${w.id}: could not commit its work: ${e.message}`);
+      // A transient git failure (e.g. index.lock) means the branch does not yet preserve this
+      // directory. Keep it active and fail the operation so a retry can checkpoint it safely.
+      if (!tampered) throw new RepoError(`could not abandon ${w.id}; its uncommitted work was left in place at ${w.path}: ${e.message}`, 'failed');
       return false;
     });
     w.status = 'abandoned';

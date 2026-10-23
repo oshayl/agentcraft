@@ -215,13 +215,15 @@ export class Foreman {
     this.syncTeamIds();
   }
 
-  /** Agent.teamId is a copy of the team roster, so the mod can colour a nameplate without a join. */
+  /** Team membership and leadership are mirrored for the mod, including promoted workers. */
   private syncTeamIds(): void {
     for (const a of this.agents()) {
       const team = this.teams.ofAgent(a.id)?.id;
-      if (a.teamId === team) continue;
+      const role = this.teams.isLead(a.id) ? 'lead' : 'worker';
+      if (a.teamId === team && a.role === role) continue;
       if (team === undefined) delete a.teamId;
       else a.teamId = team;
+      a.role = role;
       this.store.markDirty();
       this.emit({ type: 'agent.upsert', agent: { ...a } });
     }
@@ -821,7 +823,7 @@ export class Foreman {
         return { lines: r.lines };
       }
       case 'model.set': {
-        const workers = this.agents().filter((a) => a.role !== 'lead');
+        const workers = this.agents().filter((a) => !this.teams.isLead(a.id));
         const line = (a: { id: string; name: string }) => {
           const over = this.store.data.agentModels[a.id];
           return `${a.name}: ${this.backend?.modelFor?.(a.id) ?? over ?? 'default'}${over ? '' : ' (from config.json)'}`;
@@ -836,7 +838,7 @@ export class Foreman {
         const targets =
           who === 'all' ? this.agents()
           : who === 'workers' || who === 'worker' ? workers
-          : who === 'lead' ? this.agents().filter((a) => a.role === 'lead')
+          : who === 'lead' ? this.agents().filter((a) => this.teams.isLead(a.id))
           : [this.agent(this.resolveAgentId(msg.who) ?? '')].filter((a): a is Agent => !!a);
         if (!targets.length) throw new ClientError(`no agent "${msg.who}" (try lead, workers, all, or ${workers.map((w) => w.id).join(', ')})`);
         const word = msg.model.trim();
@@ -912,6 +914,22 @@ export class Foreman {
         }
         const lines: string[] = [];
         let removed = 0;
+        // Removing task history must not turn a satisfied dependency in another goal into a
+        // missing task. Clear can remove a whole dependency chain together, but if any goal
+        // must stay, retain the prerequisite goals it still references as well.
+        const removable = new Set(targets.filter((g) => dead(g) && !unfinished(g).length).map((g) => g.id));
+        let changed: boolean;
+        do {
+          changed = false;
+          const owners = new Map(this.tasks.list().filter((t) => removable.has(t.goalId ?? '')).map((t) => [t.id, t.goalId!]));
+          for (const t of this.tasks.list()) {
+            if (removable.has(t.goalId ?? '')) continue;
+            for (const dep of t.deps) {
+              const owner = owners.get(dep);
+              if (owner && removable.delete(owner)) changed = true;
+            }
+          }
+        } while (changed);
         for (const g of targets) {
           if (!dead(g)) {
             lines.push(`${g.id} is still ${g.status}; stop it first (/goals stop ${g.id}, or let it finish)`);
@@ -924,6 +942,12 @@ export class Foreman {
           const live = mine.filter((t) => t.status !== 'done' && t.status !== 'cancelled');
           if (live.length) {
             lines.push(`${g.id} still has ${live.length} task(s) live (${live.map((t) => t.id).join(', ')}); stop them first (/goals stop ${g.id})`);
+            continue;
+          }
+          if (!removable.has(g.id)) {
+            const ids = new Set(mine.map((t) => t.id));
+            const dependents = this.tasks.list().filter((t) => !removable.has(t.goalId ?? '') && t.goalId !== g.id && t.deps.some((d) => ids.has(d)));
+            lines.push(`${g.id} is still referenced by ${dependents.map((t) => t.id).join(', ')}; remove those dependencies or goals first`);
             continue;
           }
           this.store.data.tasks = this.store.data.tasks.filter((t) => t.goalId !== g.id);
@@ -957,6 +981,8 @@ export class Foreman {
           this.syncTeamIds();
           const line = `Disbanded ${name}; its repos and workers are now ${this.teams.primary().name}'s`;
           this.bus.feed('system', line);
+          // The wire has no team.remove message. Replace client maps so the old team vanishes.
+          this.emit(this.snapshot());
           return { lines: [line] };
         }
         for (const id of [...(msg.members ?? []), ...(msg.lead ? [msg.lead] : [])]) this.requireAgent(id);
@@ -1111,9 +1137,9 @@ export class Foreman {
         }
         const id = this.resolveAgentId(arg);
         if (!id) throw new ClientError(`no agent named "${arg}"`);
-        if (this.agent(id)?.role === 'lead') throw new ClientError('tasks are assigned to workers, not the lead');
+        if (this.teams.isLead(id)) throw new ClientError('tasks are assigned to workers, not the lead');
         const goal = t.goalId ? this.goal(t.goalId) : undefined;
-        const team = this.teams.get(goal?.teamId ?? t.teamId ?? this.teamForRepo(t.repoId ?? goal?.repoId).id)!;
+        const team = this.teams.get(goal?.teamId ?? t.teamId ?? '') ?? this.teamForRepo(t.repoId ?? goal?.repoId);
         if (!team.members.includes(id)) throw new ClientError(`${this.nameOf(id)} is not on ${team.name}; choose a worker on that team`);
         const changedOwner = t.assignee !== id;
         this.tasks.update(t.id, { assignee: id, assigneePinned: true });
@@ -1131,7 +1157,7 @@ export class Foreman {
     if (action === 'pause') this.setAgent(id, { paused: true });
     if (action === 'resume') this.setAgent(id, { paused: false });
     if (action === 'spawn' && arg && !this.tasks.get(arg)) throw new ClientError(`no task "${arg}"`);
-    if (action === 'spawn' && arg && this.agent(id)?.role === 'lead') throw new ClientError('tasks are assigned to workers, not the lead');
+    if (action === 'spawn' && arg && this.teams.isLead(id)) throw new ClientError('tasks are assigned to workers, not the lead');
     if (action === 'spawn') this.setAgent(id, { active: true, paused: false });
     this.bus.feed('system', `${this.nameOf(id)}: ${action}${arg ? ` ${arg}` : ''}`, { agentId: 'user' });
     await this.backend?.onAgentAction(id, action, arg);

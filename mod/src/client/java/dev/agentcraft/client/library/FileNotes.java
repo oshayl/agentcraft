@@ -35,6 +35,7 @@ public final class FileNotes {
 	private static final Set<String> LOADING = new HashSet<>();
 	private static final Map<String, String> ERRORS = new HashMap<>();
 	private static final Map<String, Long> RETRY_AFTER = new HashMap<>();
+	private static final Map<String, Long> INDEX_GENERATIONS = new HashMap<>();
 	private static long revision;
 	/** A failed index is retried this long after, so a Foreman restart fixes the tab by itself. */
 	private static final long RETRY_MS = 5_000;
@@ -115,12 +116,20 @@ public final class FileNotes {
 			QUERY.put(sourceId, q);
 		}
 		INDEX.remove(sourceId);
+		invalidateIndex(sourceId);
 		requestIndex(sourceId, q);
 	}
 
 	/** Drop what is cached for a source, so the next look re-reads the folder. */
 	public static void forget(String sourceId) {
 		INDEX.remove(sourceId);
+		invalidateIndex(sourceId);
+	}
+
+	private static void invalidateIndex(String sourceId) {
+		INDEX_GENERATIONS.merge(sourceId, 1L, Long::sum);
+		ERRORS.remove(sourceId);
+		RETRY_AFTER.remove(sourceId);
 		revision++;
 	}
 
@@ -144,9 +153,16 @@ public final class FileNotes {
 			return;
 		}
 		LOADING.add(sourceId);
+		long generation = INDEX_GENERATIONS.getOrDefault(sourceId, 0L);
 		Foreman.requestLibrary(sourceId, null, query, LIMIT).whenComplete((lib, err) -> {
 			LOADING.remove("index:" + sourceId);
 			LOADING.remove(sourceId);
+			// A query can change more than once while this request is in flight, even back to
+			// its original text. Only the latest generation may populate the tab's cache.
+			if (generation != INDEX_GENERATIONS.getOrDefault(sourceId, 0L)) {
+				requestIndex(sourceId, QUERY.get(sourceId));
+				return;
+			}
 			revision++;
 			if (err != null || lib == null || lib.error() != null) {
 				String why = err != null ? String.valueOf(err.getMessage()) : lib == null ? "no answer" : lib.error();

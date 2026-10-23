@@ -57,6 +57,7 @@ public class GoalScreen extends Screen {
 	private long confirmUntil;
 	private float scroll;
 	private float maxScroll;
+	private boolean revealSelection;
 	private final List<Btn> buttons = new ArrayList<>();
 	/** The last click the screen was handed and where it landed, and how many it has had, for {@code dev.goals}. */
 	private @Nullable String lastClick;
@@ -65,6 +66,11 @@ public class GoalScreen extends Screen {
 	private record Btn(String id, String label, int x, int y, int w, int h, boolean primary, boolean enabled) {
 		boolean hit(double mx, double my) {
 			return mx >= x && mx < x + w && my >= y && my < y + h;
+		}
+
+		Btn clipped(int top, int bottom) {
+			int cy = Math.max(y, top);
+			return new Btn(id, label, x, cy, w, Math.max(0, Math.min(y + h, bottom) - cy), primary, enabled);
 		}
 	}
 
@@ -82,6 +88,7 @@ public class GoalScreen extends Screen {
 	public GoalScreen(@Nullable String goalId) {
 		super(Component.literal("Goals"));
 		this.selected = goalId;
+		this.revealSelection = goalId != null;
 	}
 
 	@Override
@@ -153,6 +160,21 @@ public class GoalScreen extends Screen {
 		int px = (width - W) / 2;
 		int py = Math.max(4, (height - h) / 2);
 		maxScroll = Math.max(0, content - listH);
+		if (revealSelection) {
+			int at = indexOf(rows, selected);
+			if (at >= 0) {
+				int start = at * ROW_H;
+				// Keep the expanded actions in view too. On very short screens the row's
+				// top may clip, but its Stop/Remove buttons remain reachable.
+				if (start < scroll) {
+					scroll = start;
+				}
+				if (start + ROW_H + OPEN_H > scroll + listH) {
+					scroll = start + ROW_H + OPEN_H - listH;
+				}
+			}
+			revealSelection = false;
+		}
 		scroll = Math.max(0, Math.min(scroll, maxScroll));
 		Panels.panel(g, px, py, W, h);
 		int x = px + pad.left();
@@ -180,6 +202,7 @@ public class GoalScreen extends Screen {
 
 		// ---- the queue
 		int top = y;
+		int firstRowButton = buttons.size();
 		g.enableScissor(x, top, x + inner, top + listH);
 		if (rows.isEmpty()) {
 			Panels.text(g, font, Foreman.state() != null && Foreman.state().hasData() ? "Press ` and type a goal." : "Waiting for the Foreman.", x + 2,
@@ -194,6 +217,16 @@ public class GoalScreen extends Screen {
 				drawRow(g, r, i, open, x, ry, inner, top, listH, ink, muted, error, live, mouseX, mouseY);
 			}
 			ry += rh;
+		}
+		// Scissoring only clips drawing. Match the hit targets to the same viewport so
+		// hidden rows and actions cannot steal clicks from the header or footer.
+		for (int i = buttons.size() - 1; i >= firstRowButton; i--) {
+			Btn clipped = buttons.get(i).clipped(top, top + listH);
+			if (clipped.h() == 0) {
+				buttons.remove(i);
+			} else {
+				buttons.set(i, clipped);
+			}
 		}
 		g.disableScissor();
 		y = top + listH;
@@ -408,6 +441,7 @@ public class GoalScreen extends Screen {
 			return false;
 		}
 		selected = rows.get(index).goal().id();
+		revealSelection = true;
 		confirm = null;
 		feedback = null;
 		feedbackError = false;
@@ -423,7 +457,7 @@ public class GoalScreen extends Screen {
 		return -1;
 	}
 
-	/** A key's action: the button if it is on screen, otherwise the reason there is none. */
+	/** A key's action uses the current selection, even before its next rendered frame. */
 	private void act(String buttonId, @Nullable String missing) {
 		if (!press(buttonId) && missing != null) {
 			feedback = missing;
@@ -442,10 +476,27 @@ public class GoalScreen extends Screen {
 
 	/**
 	 * Press a button by id (also used by {@code dev.goals} and by the keys): open:&lt;goal&gt;, stop,
-	 * remove, clear. False when no such button is on screen — the actions only exist once a goal is
-	 * picked, and a key that lands on nothing has to say so rather than look broken.
+	 * remove, clear. Actions are resolved from current state, so keyboard input never depends on
+	 * which buttons the previous frame happened to draw.
 	 */
 	public boolean press(String id) {
+		if (id.equals("clear") || id.equals("stop") || id.equals("remove")) {
+			Row sel = null;
+			boolean finished = false;
+			for (Row r : rows()) {
+				finished |= r.finished();
+				if (r.goal().id().equals(selected)) {
+					sel = r;
+				}
+			}
+			if (!id.equals("clear") && sel == null) {
+				return false;
+			}
+			boolean available = id.equals("clear") ? finished
+				: id.equals("stop") ? sel.live() > 0 || !sel.finished() : sel.finished() && sel.live() == 0;
+			press(new Btn(id, id, 0, 0, 0, 0, false, Foreman.connected() && !sending && available), false);
+			return true;
+		}
 		for (Btn b : List.copyOf(buttons)) {
 			if (b.id().equals(id)) {
 				press(b, false);
@@ -466,6 +517,7 @@ public class GoalScreen extends Screen {
 			// Clicking the open row folds it away again — but not the second half of a double
 			// click, which would open it and close it in one gesture and look like nothing happened.
 			selected = id.equals(selected) && !repeat ? null : id;
+			revealSelection = selected != null;
 			confirm = null;
 			feedback = null;
 			return;
@@ -486,6 +538,7 @@ public class GoalScreen extends Screen {
 	private void arm(String action, @Nullable String goalId) {
 		if (!action.equals(confirm) || System.nanoTime() > confirmUntil) {
 			confirm = action;
+			revealSelection = selected != null;
 			confirmUntil = System.nanoTime() + CONFIRM_NANOS;
 			feedback = null;
 			feedbackError = false;

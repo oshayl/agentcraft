@@ -40,7 +40,7 @@ const rows: Row[] = [
   bash('npm test', 'npm test', 'allow'),
   bash('node script', 'node src/cli.ts list --tag work', 'allow'),
   bash('node --test', 'node --test test/', 'allow'),
-  bash('node -e read-only', `node -e "console.log(require('./package.json').version)"`, 'allow'),
+  bash('node -e requires exact approval', `node -e "console.log(require('./package.json').version)"`, 'ask'),
   bash('git status && diff', 'git status && git diff --stat', 'allow'),
   bash('git commit', 'git add -A && git commit -m "Add tag parser"', 'allow'),
   bash('git commit message mentioning push', 'git commit -m "explain why agents never push"', 'allow'),

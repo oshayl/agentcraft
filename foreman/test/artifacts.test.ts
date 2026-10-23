@@ -263,9 +263,15 @@ describe('a thread started before a tool existed', () => {
   });
 
   it('still resumes a thread whose tools and capabilities match', async () => {
-    const tools = [...TOOL_NAMES.common, ...TOOL_NAMES.lead].slice().sort().join(',');
+    const tools = `goal-context-v1:${[...TOOL_NAMES.common, ...TOOL_NAMES.lead].slice().sort().join(',')}`;
     const spec = await leadTurn({ caps: 'closed', tools });
     expect(spec.resume).toBe('thread-old');
+  });
+
+  it('starts a fresh thread when names match but goal context and team instructions predate this version', async () => {
+    const tools = [...TOOL_NAMES.common, ...TOOL_NAMES.lead].slice().sort().join(',');
+    const spec = await leadTurn({ caps: 'closed', tools });
+    expect(spec.resume).toBeUndefined();
   });
 });
 

@@ -116,9 +116,20 @@ export class Teams {
     return this.teams.some((t) => t.lead === agentId);
   }
 
+  /** Validate the whole roster before changing any team, including on a rejected command. */
+  private validateRoster(id: string, lead: string, members: string[]): void {
+    if (!lead) throw new TeamError('a team must have a lead');
+    for (const t of this.teams) {
+      if (t.id === id) continue;
+      if (t.lead === lead) throw new TeamError(`${lead} already leads "${t.id}"`);
+      if (members.includes(t.lead)) throw new TeamError(`${t.lead} leads "${t.id}"; give that team a new lead first`);
+    }
+  }
+
   create(input: CreateTeamInput): Team {
     if (!ID.test(input.id)) throw new TeamError(`bad team id "${input.id}" (lowercase letters, digits and dashes)`);
     if (this.get(input.id)) throw new TeamError(`team "${input.id}" already exists`);
+    this.validateRoster(input.id, input.lead, (input.members ?? []).filter((m) => m !== input.lead));
     const team: Team = {
       id: input.id,
       name: input.name.trim() || input.id,
@@ -144,6 +155,9 @@ export class Teams {
    */
   update(id: string, patch: TeamPatch): Team {
     const team = this.require(id);
+    const lead = patch.lead ?? team.lead;
+    const members = (patch.members ?? [...team.members, ...(team.lead !== lead ? [team.lead] : [])]).filter((m) => m !== lead);
+    this.validateRoster(id, lead, members);
     const touched = new Set<Team>([team]);
 
     if (patch.name !== undefined) team.name = patch.name.trim() || team.id;
@@ -206,13 +220,32 @@ export class Teams {
   remove(id: string, into?: string): void {
     const team = this.require(id);
     if (this.teams.length === 1) throw new TeamError('the last team cannot be disbanded');
-    const target = this.get(into ?? '') ?? this.teams.find((t) => t !== team)!;
+    const target = into ? this.require(into) : this.teams.find((t) => t !== team)!;
+    if (target === team) throw new TeamError('a team cannot be disbanded into itself');
+    const goals = this.ctx.store.data.goals.filter((g) => g.teamId === id || (!g.teamId && team.repos.includes(g.repoId ?? '')));
+    const goalIds = new Set(goals.map((g) => g.id));
+    const tasks = this.ctx.store.data.tasks.filter((t) => t.teamId === id || goalIds.has(t.goalId ?? '') || (!t.teamId && team.repos.includes(t.repoId ?? '')));
+    // Running/paused turns still belong to the old lead and workers. Moving them behind their
+    // backs leaves stale queues and worktree ownership; stop or finish that work first.
+    if (goals.some((g) => g.status === 'planning' || g.status === 'active') || tasks.some((t) => t.status !== 'done' && t.status !== 'cancelled')) {
+      throw new TeamError(`team "${id}" has unfinished work; stop or finish its goals and tasks before disbanding`);
+    }
     this.teams.splice(this.teams.indexOf(team), 1);
+    for (const g of goals) {
+      g.teamId = target.id;
+      g.updatedAt = this.ctx.now();
+    }
+    for (const t of tasks) {
+      t.teamId = target.id;
+      t.updatedAt = this.ctx.now();
+    }
     this.update(target.id, {
       members: [...target.members, ...team.members, team.lead],
       repos: [...target.repos, ...team.repos],
     });
     this.ctx.store.markDirty();
+    for (const g of goals) this.ctx.emit({ type: 'goal.upsert', goal: { ...g } });
+    for (const t of tasks) this.ctx.emit({ type: 'task.upsert', task: { ...t, deps: [...t.deps] } });
   }
 
   /**

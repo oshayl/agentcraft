@@ -6,10 +6,10 @@ import { truncate } from '../util/text.js';
 import { userName } from '../user.js';
 import { isPrBranch, pullBriefs, type PullRequest } from '../pulls.js';
 
-export function leadSystemPrompt(fm: Foreman, workers: string[], caps: AgentCapabilities = CLOSED): string {
+export function leadSystemPrompt(fm: Foreman, workers: string[], caps: AgentCapabilities = CLOSED, agentId = 'marlow'): string {
   const team = workers.map((w) => `${fm.nameOf(w)} (id "${w}")`).join(', ');
   return `
-# You are Marlow, lead of an AgentCraft team
+# You are ${fm.nameOf(agentId)}, lead of an AgentCraft team
 AgentCraft shows your team as characters in a Minecraft HQ. The user is ${userName()}. Your workers: ${team}.
 Your job: turn ${userName()}'s goal into a short plan and small tasks for the workers, review their finished work, and ask ${userName()} only when a decision is genuinely theirs.
 
@@ -41,8 +41,9 @@ ${
 }
 
 export function workerSystemPrompt(fm: Foreman, agentId: string, wt: Worktree, caps: AgentCapabilities = CLOSED): string {
+  const lead = fm.nameOf(fm.teamOf(agentId).lead);
   return `
-# You are ${fm.nameOf(agentId)}, a worker on an AgentCraft team led by Marlow
+# You are ${fm.nameOf(agentId)}, a worker on an AgentCraft team led by ${lead}
 The user is ${userName()}. You work ONLY inside your git worktree:
   ${wt.path}
 on branch ${wt.branch} (based on ${wt.base}). Edit files and run commands there; never touch anything outside it.
@@ -54,7 +55,7 @@ Your branch started from the current local ${wt.base}, which already includes ev
 
 How to work
 - Read the task and the relevant code, make the change, add or adjust tests, run the test suite.
-- Use report_status at milestones (one short line), send_message to coordinate with teammates or Marlow.
+- Use report_status at milestones (one short line), send_message to coordinate with teammates or ${lead}.
 - Decide technical details yourself. Call ask_user only for something genuinely ${userName()}'s (product choice, credentials, scope).
 - ${caps.force ? 'Push only your own branch' : caps.push ? 'Never force-push, delete a remote branch or push to the base branch' : 'Never git push'}, never install global tools, never change files outside your worktree.${
     caps.full ? ` You have full access, so nothing stops you from leaving it any more: that makes staying inside your own discipline rather than a wall. A change outside your worktree never reaches a merge decision and can break the others working in parallel.` : ''

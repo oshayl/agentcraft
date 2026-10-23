@@ -63,6 +63,10 @@ interface Job {
   nudges?: number;
   /** continuing an interrupted job (restart, pause): log the prompt */
   resumed?: boolean;
+  /** feedback waiting for this worker to finish its current task */
+  revision?: boolean;
+  /** a new user message may still ask the lead about a closed goal */
+  userMessage?: boolean;
 }
 
 interface Inflight {
@@ -106,10 +110,11 @@ function alive(child: ChildProcess | undefined): child is ChildProcess {
 
 /**
  * The team tools a role gets, as one string. Part of a session's fingerprint: see
- * SessionRecord.tools. Built from the names rather than the built tools, so it costs nothing.
+ * SessionRecord.tools. Include the goal-context semantics so older threads cannot retain
+ * tools bound to whichever goal happened to be newest when they were created.
  */
 function toolFingerprint(role: Role): string {
-  return [...TOOL_NAMES.common, ...(role === 'lead' ? TOOL_NAMES.lead : [])].slice().sort().join(',');
+  return `goal-context-v1:${[...TOOL_NAMES.common, ...(role === 'lead' ? TOOL_NAMES.lead : [])].slice().sort().join(',')}`;
 }
 
 const TURN_TIMEOUT_MS = 45 * 60_000;
@@ -284,7 +289,9 @@ export class TeamBackend implements Backend {
   private lastCost = new Map<string, number>();
   private turnPromises = new Set<Promise<void>>();
   /** tasks whose CI + review hand-off is in progress */
-  private reviewing = new Set<string>();
+  private reviewing = new Map<string, symbol>();
+  /** invalidates asynchronous review work when ownership or user intent changes */
+  private reviewVersions = new Map<string, number>();
   /** the most recent turn per agent (kept after it ends, for quiesce) */
   private lastTurn = new Map<string, Running>();
   /** tasks changing hands: off the board until the old turn is over and its work committed */
@@ -365,9 +372,9 @@ export class TeamBackend implements Backend {
   /** The team id a job belongs to (see {@link leadFor}). */
   private teamFor(of: { goalId?: string; taskId?: string; repoId?: string; agentId?: string }): string {
     const goal = of.goalId ? this.fm.goal(of.goalId) : undefined;
-    if (goal?.teamId) return goal.teamId;
+    if (goal?.teamId && this.fm.teams.get(goal.teamId)) return goal.teamId;
     const task = of.taskId ? this.fm.tasks.get(of.taskId) : undefined;
-    if (task?.teamId) return task.teamId;
+    if (task?.teamId && this.fm.teams.get(task.teamId)) return task.teamId;
     const repoId = of.repoId ?? task?.repoId ?? goal?.repoId;
     const byRepo = this.fm.teams.ofRepo(repoId);
     if (byRepo) return byRepo.id;
@@ -960,6 +967,21 @@ export class TeamBackend implements Backend {
     this.pump(job.agentId);
   }
 
+  /** Queued and paused jobs must still belong to live tasks and goals when they start. */
+  private jobValid(job: Job): boolean {
+    const task = job.taskId ? this.fm.tasks.get(job.taskId) : undefined;
+    if (job.taskId && (!task || task.status === 'cancelled' || task.status === 'done')) return false;
+    const goalId = job.goalId ?? task?.goalId;
+    const goal = goalId ? this.fm.goal(goalId) : undefined;
+    if (goalId && !goal) return false;
+    if (goal && (goal.status === 'cancelled' || goal.status === 'failed')
+        && !(job.userMessage && !job.resumed && this.isLead(job.agentId))) return false;
+    if (task && job.goalId && task.goalId !== job.goalId) return false;
+    if (this.isLead(job.agentId)) return job.kind !== 'review' || task?.status === 'review';
+    return !!task && task.assignee === job.agentId && !!task.repoId && !!task.worktree
+      && (task.status === 'doing' || task.status === 'review' || task.status === 'blocked');
+  }
+
   private pump(agentId: string): void {
     if (this.stopping || this.authFailed) return;
     if (this.running.has(agentId)) return;
@@ -967,7 +989,15 @@ export class TeamBackend implements Backend {
     if (!a || a.paused || !a.active || this.isStopped(agentId)) return;
     const q = this.queues.get(agentId);
     if (!q?.length) return;
-    if (!this.isLead(agentId) && this.workersRunning() >= this.cfg.maxConcurrent) return;
+    // Cancellation can arrive while an aborted turn is unwinding. Discard those jobs even
+    // when the intent handler could not see them yet.
+    for (let i = q.length - 1; i >= 0; i--) if (!this.jobValid(q[i]!)) q.splice(i, 1);
+    if (!q.length) return;
+    if (!this.isLead(agentId)) {
+      if (this.workersRunning() >= this.cfg.maxConcurrent || !this.engineHasRoom(agentId)) return;
+      const t = this.fm.tasks.get(q[0]!.taskId!);
+      if (!t || !this.fm.tasks.depsSatisfied(t) || this.handoffs.has(t.id)) return;
+    }
     const job = q.shift()!;
     const p = this.runJob(job).finally(() => {
       this.turnPromises.delete(p);
@@ -1143,6 +1173,7 @@ export class TeamBackend implements Backend {
 
   private async runJob(job: Job): Promise<void> {
     const agentId = job.agentId;
+    if (!this.jobValid(job)) return;
     const abort = new AbortController();
     const entry: Running = { abort, job };
     const turn: TurnHandle = {
@@ -1159,6 +1190,10 @@ export class TeamBackend implements Backend {
       // a paused/stopped turn of this agent may still be winding down: never run two CLIs on one
       // agent (they could share a session)
       if (previous?.reaping) await Promise.race([previous.reaping, sleep(10_000)]);
+      if (abort.signal.aborted || !this.jobValid(job)) {
+        if (!abort.signal.aborted) this.abortTurn(entry, 'cancel');
+        throw new Error('job withdrawn');
+      }
       const where = this.cwdFor(job);
       cwd = where.cwd;
       const role = where.role;
@@ -1187,10 +1222,14 @@ export class TeamBackend implements Backend {
       this.fm.store.markDirty();
 
       let systemAppend: string;
-      if (role === 'lead') systemAppend = leadSystemPrompt(this.fm, this.team, capabilities);
+      if (role === 'lead') systemAppend = leadSystemPrompt(this.fm, this.fm.teamOf(agentId).members, capabilities, agentId);
       else {
         const t = this.fm.tasks.require(job.taskId!);
         systemAppend = workerSystemPrompt(this.fm, agentId, this.fm.repos.requireWorktree(t.repoId!, t.worktree!), capabilities);
+      }
+      if (role === 'worker') {
+        const t = this.fm.tasks.require(job.taskId!);
+        this.fm.setAgent(agentId, { taskId: t.id, repoId: t.repoId!, worktree: t.worktree!, state: 'thinking', station: 'desk', activity: `${job.revision ? 'revising' : 'working on'} ${t.id}` });
       }
       const model = this.modelFor(agentId);
       this.fm.agentLog(agentId, 'text', `${resume ? 'Resuming' : 'Starting'} ${job.kind}${job.taskId ? ` ${job.taskId}` : ''} (${engine.id === 'claude' ? model : `${engine.label} ${model}`})`);
@@ -1200,6 +1239,11 @@ export class TeamBackend implements Backend {
       const unread = this.fm.bus.inbox(agentId, { markRead: true });
       const prompt = unread.length ? `${job.prompt}\n\n[New messages]\n${formatInbox(unread, (id) => this.fm.nameOf(id))}` : job.prompt;
       try {
+        const writableRoots = await this.writableRoots(role, job);
+        if (abort.signal.aborted || !this.jobValid(job)) {
+          if (!abort.signal.aborted) this.abortTurn(entry, 'cancel');
+          throw new Error('job withdrawn');
+        }
         stats = await engine.runTurn({
           agentId,
           role,
@@ -1209,12 +1253,12 @@ export class TeamBackend implements Backend {
           instructions: systemAppend,
           ...(resume ? { resume } : {}),
           env: agentEnv(process.env, { agentId, cwd, capabilities }),
-          writableRoots: await this.writableRoots(role, job),
+          writableRoots,
           capabilities,
           abort,
           turn,
           permission: this.permissionGate(agentId, role, cwd, turn, capabilities),
-          tools: agentTools(this.fm, agentId, role, this.hooks, turn),
+          tools: agentTools(this.fm, agentId, role, this.hooks, turn, { goalId: job.goalId }),
           // a stopped turn's whole process tree is ended before its worktree is handed on
           onProcess: (child) => {
             entry.child = child;
@@ -1255,7 +1299,7 @@ export class TeamBackend implements Backend {
     if (reason) void this.reap(entry);
     delete this.st.inflight[agentId];
     this.fm.store.markDirty();
-    if (reason === 'pause') {
+    if (reason === 'pause' && this.jobValid(job)) {
       const next: Job = { ...job, fresh: false, resumed: true, prompt: `${userName()} paused you and has now resumed you. Any question you had open was withdrawn; ask again if you still need it. Continue your current job.` };
       // resume may already have arrived while the aborted turn was unwinding
       if (this.fm.agent(agentId)?.paused) {
@@ -1323,6 +1367,7 @@ export class TeamBackend implements Backend {
   }
 
   private async afterTurn(job: Job, stats: TurnStats | undefined): Promise<void> {
+    if (!this.jobValid(job)) return;
     const failed = !stats || stats.isError;
     if (this.isLead(job.agentId)) {
       const lead = job.agentId;
@@ -1371,6 +1416,7 @@ export class TeamBackend implements Backend {
       }
       const wt = t.worktree && t.repoId ? this.fm.repos.findWorktree(t.repoId, t.worktree) : undefined;
       if (wt) await this.fm.repos.refresh(t.repoId!);
+      if (!this.jobValid(job) || t.status !== 'doing') return;
       if (!failed && wt && wt.files > 0) {
         this.fm.tasks.setStatus(t.id, 'review', { summary: truncate(stats?.resultText ?? 'work complete', 400) });
         await this.afterWorkerDone(t.id);
@@ -1394,25 +1440,44 @@ export class TeamBackend implements Backend {
   /** A worker finished a task: CI in the worktree, then lead review (or a merge decision). */
   private async afterWorkerDone(taskId: string): Promise<void> {
     if (this.reviewing.has(taskId)) return; // CI already running for it
-    this.reviewing.add(taskId);
+    const token = Symbol(taskId);
+    this.reviewing.set(taskId, token);
     try {
       await this.ciThenReview(taskId);
     } finally {
-      this.reviewing.delete(taskId);
+      if (this.reviewing.get(taskId) === token) this.reviewing.delete(taskId);
     }
+  }
+
+  /** Capture primitives: Task records are mutated in place while git and CI are awaited. */
+  private reviewCurrent(t: Task): () => boolean {
+    const { id, assignee, repoId, worktree, goalId } = t;
+    const version = this.reviewVersions.get(id);
+    return () => {
+      const current = this.fm.tasks.get(id);
+      const goal = goalId ? this.fm.goal(goalId) : undefined;
+      return !this.stopping && this.reviewVersions.get(id) === version
+        && !!current && current.status === 'review' && current.assignee === assignee
+        && current.repoId === repoId && current.worktree === worktree && current.goalId === goalId
+        && (!goalId || (!!goal && goal.status !== 'cancelled' && goal.status !== 'failed'));
+    };
   }
 
   private async ciThenReview(taskId: string): Promise<void> {
     const t = this.fm.tasks.get(taskId);
     if (!t || t.status !== 'review' || !t.repoId || !t.worktree) return;
+    this.reviewVersions.set(taskId, (this.reviewVersions.get(taskId) ?? 0) + 1);
+    const current = this.reviewCurrent(t);
+    if (!current()) return;
     const worker = t.assignee;
-    if (worker) this.fm.setAgent(worker, { state: 'idle', station: 'lounge', activity: `${t.id} in review` });
+    if (worker && this.fm.agent(worker)?.taskId === t.id && !this.running.has(worker)) this.fm.setAgent(worker, { state: 'idle', station: 'lounge', activity: `${t.id} in review` });
     let ci: TestResult | undefined;
     try {
       this.fm.tasks.update(t.id, { ci: 'running' });
       this.fm.repos.setCi(t.repoId, 'running');
       if (worker) this.fm.agentLog(worker, 'tool', `CI: ${this.cfg.ciCommand ?? this.fm.repos.detectTestCommand(this.fm.repos.requireWorktree(t.repoId, t.worktree).path) ?? '(no tests)'}`);
       ci = await this.fm.repos.runTests(t.repoId, t.worktree, this.cfg.ciCommand);
+      if (!current()) return;
       this.fm.tasks.update(t.id, { ci: ci.pass ? 'pass' : 'fail' });
       this.fm.repos.setCi(t.repoId, ci.pass ? 'pass' : 'fail');
       if (worker) this.fm.agentLog(worker, ci.pass ? 'result' : 'error', `CI ${ci.pass ? 'passed' : 'FAILED'} (${(ci.durationMs / 1000).toFixed(1)}s)\n${ci.output.split('\n').slice(-6).join('\n')}`);
@@ -1420,7 +1485,9 @@ export class TeamBackend implements Backend {
     } catch (e) {
       this.fm.log.warn(`CI for ${t.id}: ${(e as Error).message}`);
     }
+    if (!current()) return;
     await this.fm.repos.refresh(t.repoId);
+    if (!current()) return;
     if (ci && !ci.pass && (this.st.ciFixes[t.id] ?? 0) < 1 && worker && !this.isStopped(worker)) {
       this.st.ciFixes[t.id] = (this.st.ciFixes[t.id] ?? 0) + 1;
       this.sendBackToWorker(t.id, `CI failed for ${t.id} (${ci.command}):\n${ci.output}\n\nFix the failures, re-run the tests, then update_task("${t.id}", status "review", summary).`);
@@ -1429,14 +1496,16 @@ export class TeamBackend implements Backend {
     const lead = this.leadFor({ taskId: t.id });
     if (this.cfg.leadReview && !this.isStopped(lead)) {
       const diff = await this.fm.repos.diff(t.repoId, t.worktree);
+      if (!current()) return;
       this.fm.setAgent(lead, { state: 'reading', station: 'mergestation', activity: `reviewing ${t.id}` });
       this.enqueue({ kind: 'review', agentId: lead, taskId: t.id, ...(t.goalId ? { goalId: t.goalId } : {}), sessionKey: `${lead}:${t.goalId ?? 'adhoc'}`, prompt: reviewPrompt(this.fm, this.fm.tasks.require(t.id), renderDiffText(diff.files), diff.stats, ci) });
     } else {
-      await this.openMergeDecision(t, t.summary ?? 'Work complete.');
+      await this.openMergeDecision(t, t.summary ?? 'Work complete.', current);
     }
   }
 
-  private async openMergeDecision(t: Task, summary: string): Promise<void> {
+  private async openMergeDecision(t: Task, summary: string, current = this.reviewCurrent(t)): Promise<void> {
+    if (!current()) return;
     const wt = this.fm.repos.requireWorktree(t.repoId!, t.worktree!);
     const lead = this.leadFor({ taskId: t.id });
     // A branch that already landed has nothing to approve. Asking anyway puts a card on the
@@ -1451,12 +1520,15 @@ export class TeamBackend implements Backend {
     // Rather than let the user discover that only when they click Merge, review their work here
     // and offer to commit it as part of the same answer.
     const mine = await this.fm.repos.uncommittedReview(t.repoId!, wt.branch).catch(() => undefined);
+    if (!current()) return;
     const blocked = !!mine?.files.length;
     const clash = blocked && !!mine?.overlapping?.length;
     // Files they have but never committed that this branch also adds. Git refuses to overwrite
     // those, so the merge would die at the last step with a message about moving them; better to
     // say so here, with the option that handles it.
     const inTheWay = await this.fm.repos.collidingUntracked(t.repoId!, wt.id).catch(() => []);
+    if (!current()) return;
+    if (this.fm.decisions.open().some((d) => d.kind === 'merge' && d.taskId === t.id)) return;
     const inTheWayNote = inTheWay.length
       ? `\n\n${inTheWay.length} file(s) you have in ${wt.base} but never committed are the same files this branch adds, so git will not let the merge overwrite them: ${inTheWay
           .slice(0, 6)
@@ -1494,7 +1566,10 @@ export class TeamBackend implements Backend {
   /** Resume the worker's task session with feedback (lead/user changes, CI failure). */
   private sendBackToWorker(taskId: string, prompt: string): void {
     const t = this.fm.tasks.get(taskId);
-    if (!t?.assignee) return;
+    if (!t?.assignee || t.status === 'done' || t.status === 'cancelled') return;
+    const goal = t.goalId ? this.fm.goal(t.goalId) : undefined;
+    if (t.goalId && (!goal || goal.status === 'cancelled' || goal.status === 'failed')) return;
+    if (this.hasQueued(t.assignee, (j) => j.taskId === t.id && j.revision === true)) return;
     if (this.isStopped(t.assignee)) {
       // nobody to send it back to: put it on the board for the next free worker
       this.fm.tasks.setStatus(t.id, 'todo', { force: true, summary: truncate(prompt, 400) });
@@ -1503,8 +1578,9 @@ export class TeamBackend implements Backend {
       return;
     }
     if (t.status !== 'doing') this.fm.tasks.setStatus(t.id, 'doing', { force: true });
-    this.fm.setAgent(t.assignee, { taskId: t.id, state: 'thinking', station: 'desk', activity: `revising ${t.id}`, ...(t.repoId ? { repoId: t.repoId } : {}), ...(t.worktree ? { worktree: t.worktree } : {}) });
-    this.enqueue({ kind: 'followup', agentId: t.assignee, taskId: t.id, ...(t.goalId ? { goalId: t.goalId } : {}), sessionKey: `${t.assignee}:${t.id}`, prompt });
+    // CI may finish while this worker runs another task. Bind its task and worktree only
+    // when this revision reaches the front of the queue, preserving the active turn's tools.
+    this.enqueue({ kind: 'followup', revision: true, agentId: t.assignee, taskId: t.id, ...(t.goalId ? { goalId: t.goalId } : {}), sessionKey: `${t.assignee}:${t.id}`, prompt });
   }
 
   // ---- user intents -------------------------------------------------------------------------
@@ -1553,7 +1629,7 @@ export class TeamBackend implements Backend {
         return;
       }
       consume();
-      this.enqueue({ kind: 'followup', agentId: id, goalId: goal.id, sessionKey: `${id}:${goal.id}`, prompt });
+      this.enqueue({ kind: 'followup', userMessage: true, agentId: id, goalId: goal.id, sessionKey: `${id}:${goal.id}`, prompt });
       return;
     }
     const lead = this.leadFor({ agentId: id });
@@ -1665,6 +1741,11 @@ export class TeamBackend implements Backend {
    * against a goal nobody wanted, and put fresh tasks on a board the user had just cleared.
    */
   onGoalCancelled(goal: Goal): void {
+    for (const t of this.fm.tasks.forGoal(goal.id)) {
+      this.reviewVersions.set(t.id, (this.reviewVersions.get(t.id) ?? 0) + 1);
+      this.reviewing.delete(t.id);
+    }
+    for (const [id, job] of this.pausedJobs) if (job.goalId === goal.id) this.pausedJobs.delete(id);
     for (const [, r] of this.running) {
       if (r.job.goalId === goal.id) this.abortTurn(r, 'cancel');
     }
@@ -1673,9 +1754,16 @@ export class TeamBackend implements Backend {
   }
 
   onTaskAction(task: Task, action: 'reassign' | 'cancel' | 'retry' | 'prioritize' | 'unblock', arg?: string): void {
+    if (action === 'cancel' || action === 'reassign' || action === 'retry') {
+      this.reviewVersions.set(task.id, (this.reviewVersions.get(task.id) ?? 0) + 1);
+      this.reviewing.delete(task.id);
+    }
     if (action === 'cancel' || action === 'reassign') {
+      for (const [id, job] of this.pausedJobs) {
+        if (job.taskId === task.id && (action === 'cancel' || task.assignee !== id)) this.pausedJobs.delete(id);
+      }
       for (const [id, r] of this.running) {
-        if (r.job.taskId === task.id && !this.isLead(id) && (action === 'cancel' || task.assignee !== id)) this.abortTurn(r, 'cancel');
+        if (r.job.taskId === task.id && (action === 'cancel' || task.assignee !== id)) this.abortTurn(r, 'cancel');
       }
       for (const [id, q] of this.queues) this.queues.set(id, q.filter((j) => j.taskId !== task.id || (action === 'reassign' && task.assignee === id)));
       // reassigned: the new worker continues from the old worker's branch once that turn is over
@@ -1730,7 +1818,7 @@ export class TeamBackend implements Backend {
       }
       const job = this.pausedJobs.get(agentId);
       this.pausedJobs.delete(agentId);
-      if (job) this.enqueue(job);
+      if (job && this.jobValid(job)) this.enqueue(job);
       else this.pump(agentId);
       if (this.isLead(agentId) && wasStopped) this.reconcile();
       // messages the user sent while the agent was off shift or paused

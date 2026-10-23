@@ -592,7 +592,13 @@ public final class LibraryScreen extends Screen {
 		if (e == null) {
 			return;
 		}
-		minecraft.keyboardHandler.setClipboard(e.body());
+		String text = bodyOf(e);
+		if (FileNotes.isSource(e.scope()) && !FileNotes.hasBody(e)) {
+			flash = "Reading note; press C again when it has loaded";
+			flashUntil = System.currentTimeMillis() + 2500;
+			return;
+		}
+		minecraft.keyboardHandler.setClipboard(text);
 		flash = "Copied \"" + TextUtil.ellipsize(font, e.title(), 140) + "\" as markdown";
 		flashUntil = System.currentTimeMillis() + 2500;
 	}
