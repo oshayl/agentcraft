@@ -247,7 +247,10 @@ export class CodexEngine implements Engine {
       await this.initialize(server);
       const userConfig = (await server.request<any>('config/read', { cwd }, 30_000).catch(() => undefined))?.config;
       if (typeof userConfig?.model === 'string') this.configuredModel ??= userConfig.model;
-      const model = spec.model ?? (role === 'lead' ? this.cfg.leadModel : this.cfg.workerModel);
+      const requestedModel = spec.model ?? (role === 'lead' ? this.cfg.leadModel : this.cfg.workerModel);
+      // `model()` returns a display placeholder when the CLI config has no model. Sending that
+      // label as an API model fails on ChatGPT accounts; omission lets Codex pick its real default.
+      const model = requestedModel === 'default' ? undefined : requestedModel;
       const dynamicTools = spec.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, inputSchema: z.toJSONSchema(z.object(t.shape)) }));
       const thread = {
         cwd,

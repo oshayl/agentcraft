@@ -89,11 +89,12 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     case 'initialize':
       return reply({ userAgent: 'fake-codex', codexHome: '', platformFamily: process.platform, platformOs: process.platform });
     case 'config/read':
-      return reply({ config: { model: 'gpt-fake', mcp_servers: { posthog: { url: 'https://example.invalid' } }, plugins: { 'computer-use@openai-bundled': { enabled: true } } } });
+      return reply({ config: scenario.config ?? { model: 'gpt-fake', mcp_servers: { posthog: { url: 'https://example.invalid' } }, plugins: { 'computer-use@openai-bundled': { enabled: true } } } });
     case 'account/read':
       return reply(scenario.account ?? { account: { type: 'chatgpt', email: 'x@example.com', planType: 'plus' }, requiresOpenaiAuth: true });
     case 'thread/start':
     case 'thread/resume':
+      if (m.params.model === 'default') return send({ id: m.id, error: { code: -32602, message: "The 'default' model is not supported when using Codex with a ChatGPT account" } });
       role = (m.params.dynamicTools ?? []).some((t) => t.name === 'create_task') ? 'lead' : 'worker';
       cwd = m.params.cwd ?? cwd;
       thread = m.method === 'thread/resume' ? m.params.threadId : `th-${role}-${process.pid}`;

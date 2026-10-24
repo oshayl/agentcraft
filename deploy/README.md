@@ -36,6 +36,25 @@ sudo /opt/agentcraft/current/deploy/health.sh
 
 Allow only the owner's authorized tailnet access to guest TCP 25565 and SSH TCP 22. Foreman TCP 7878 remains on loopback and requires the bridge credential. Development port 7879 stays disabled. Retain `online-mode=true`, the owner allowlist, and the configured UUID. The two units are independent: stopping Minecraft must never stop Foreman or Codex. Neither unit depends on an SSH session. Confirm empty-server behavior and boot recovery on the chosen guest.
 
+## Unraid Docker installation
+
+When hardware virtualization is unavailable, `deploy/install-docker.sh` supplies an application-only Docker deployment. It creates three containers: a stable network namespace, Foreman, and Minecraft. The two application lifetimes remain independent. A separate Docker bridge, non-root users, dropped capabilities, read-only container roots, private persistent directories, and memory/CPU/PID limits constrain the deployment. No Docker socket or unrelated share is mounted. Only host loopback TCP 25565 is published; persistent Tailscale Serve forwards private TCP 25565 to it, including on userspace-networking Unraid installations. Foreman is reachable only on the shared container loopback and requires its credential.
+
+Run the verified archive's installer as root on Unraid with `--release DIR`, `--owner-uuid UUID`, `--owner-name USERNAME`, and `--server-address TAILSCALE_IP`. It builds the pinned image and prepares the containers under `/mnt/user/appdata/agentcraft`, without starting either application. `AGENTCRAFT_DEPLOY_ROOT` can override that private state location. Existing unrelated containers and Serve ports are preserved. A different existing AgentCraft release is refused and requires idle maintenance.
+
+The Docker installer can stage everything without EULA acceptance. In that case Minecraft remains stopped with its restart policy disabled. Once the owner has explicitly accepted the EULA, rerun the same installer with `--accept-eula`, then start the new application containers. Authenticate Codex into the Foreman container's persistent `/var/lib/agentcraft/codex`; configure only approved local repositories in `/var/lib/agentcraft/foreman/config.json`. The official headless authentication-cache transfer method is supported; transfer credentials privately over SSH and preserve owner-only access. Never put authentication data in an image or command argument.
+
+```sh
+docker start agentcraft-foreman
+docker start agentcraft-minecraft
+bash deploy/docker-control.sh health
+bash deploy/test-container-sandbox.sh IMAGE
+```
+
+Run the sandbox check against the actual image before real work. `seccomp-codex.json` retains Moby's default deny policy and adds only the namespace/mount operations needed by nested unprivileged bubblewrap. Foreman remains non-root with all outer capabilities dropped and no new privileges. Minecraft retains Docker's default seccomp policy. Profile provenance is recorded in the added rule; its Apache license is supplied in `LICENSE.moby-profiles`. The standard Codex per-thread sandbox and AgentCraft approval policy remain enabled.
+
+For logs and an idle-only consistent backup, use `docker-control.sh logs foreman` or `docker-control.sh backup`. The latter temporarily stops only these application containers after confirming no active work, archives private state without the auth cache or bridge token, and restores their previous running state. Copy backups off-host. Restore into a separate empty directory/container deployment, use the recorded image, regenerate the token, restore ownership, authenticate Codex, and verify health, worktree state, and job recovery before reconnecting a client. Never mount live and restored state into the same instance. Before an update, wait for idle, take a verified backup, stop and remove only the three AgentCraft containers, then run the new release installer against the preserved private state. Do not remove the state directory or unrelated Docker images/containers.
+
 ## MacBook Pro installation
 
 Install Minecraft Launcher and sign in with a Microsoft account that has Minecraft Java access. Install or reuse Tailscale on the same tailnet as the guest. The helper reuses Java 25 when installed; otherwise it downloads a verified private Java runtime for the Mac's architecture. Python 3 is required for setup only.
