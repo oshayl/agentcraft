@@ -44,6 +44,8 @@ Run the verified archive's installer as root on Unraid with `--release DIR`, `--
 
 The Docker installer can stage everything without EULA acceptance. In that case Minecraft remains stopped with its restart policy disabled. Once the owner has explicitly accepted the EULA, rerun the same installer with `--accept-eula`, then start the new application containers. Authenticate Codex into the Foreman container's persistent `/var/lib/agentcraft/codex`; configure only approved local repositories in `/var/lib/agentcraft/foreman/config.json`. The official headless authentication-cache transfer method is supported; transfer credentials privately over SSH and preserve owner-only access. Never put authentication data in an image or command argument.
 
+For Unraid boot ordering, install `deploy/unraid-start.sh` as `/boot/config/agentcraft-start.sh` and add a single background invocation to `/boot/config/go`, preserving a backup of the original file. The helper waits for Docker, starts this deployment's network namespace before Foreman, and starts Minecraft only when the EULA file already records acceptance. Tailscale Serve resumes its saved background configuration independently. Test this helper without restarting the host; a full host reboot remains a separate maintenance test.
+
 ```sh
 docker start agentcraft-foreman
 docker start agentcraft-minecraft
