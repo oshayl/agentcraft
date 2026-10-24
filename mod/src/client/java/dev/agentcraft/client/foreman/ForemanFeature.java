@@ -41,7 +41,8 @@ public final class ForemanFeature {
 		ForemanLink link = new ForemanLink(uri, modVersion, state, r -> Minecraft.getInstance().execute(r), enabled);
 		Foreman.install(state, link);
 		ClientLifecycleEvents.CLIENT_STARTED.register(mc -> link.start());
-		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> link.stop());
+		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> Foreman.link().stop());
+		ClientBridge.init();
 
 		DevBridge.addStateContributor((mc, o) -> o.add("foreman", stateJson()));
 		DevBridge.register("dev.foreman", 10_000,
@@ -49,7 +50,7 @@ public final class ForemanFeature {
 			(req, mc) -> {
 				boolean reconnect = Fields.of(req).optBool("reconnect", false);
 				if (reconnect) {
-					link.reconnectNow();
+					Foreman.link().reconnectNow();
 				}
 				return DevBridge.onClient(mc, ForemanFeature::stateJson);
 			});
@@ -94,7 +95,7 @@ public final class ForemanFeature {
 					} else if (state.isHeld()) {
 						o.addProperty("released", state.releaseHold(release.equals("replay")));
 						if (release.equals("reconnect")) {
-							link.reconnectNow();
+							Foreman.link().reconnectNow();
 						}
 					}
 					o.addProperty("held", state.isHeld());

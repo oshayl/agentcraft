@@ -32,6 +32,7 @@ public class AgentCraft implements ModInitializer {
 		Anchors.init();
 		AgentCraftCommands.init();
 		HqFeature.init();
+		dev.agentcraft.network.ServerBridge.init();
 		LOGGER.info("AgentCraft common init done ({} blocks, cast {})", ModBlocks.all().size(), Cast.ids());
 	}
 

@@ -29,6 +29,7 @@ public final class Foreman {
 	static void install(ForemanState s, ForemanLink l) {
 		state = s;
 		link = l;
+		state.setLink(l.status());
 	}
 
 	public static ForemanState state() {

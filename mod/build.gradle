@@ -104,3 +104,20 @@ tasks.register("mcSources", Sync) {
 	into(layout.buildDirectory.dir("mcsrc"))
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
+
+// Runtime regression checks execute shared code without booting Minecraft or touching its worlds.
+sourceSets {
+	bridgeChecks {
+		java.srcDir 'src/bridgeChecks/java'
+		compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+		runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+	}
+}
+tasks.register('bridgeChecks', JavaExec) {
+	group = 'verification'
+	dependsOn tasks.named('bridgeChecksClasses')
+	classpath = sourceSets.bridgeChecks.runtimeClasspath
+	mainClass = 'dev.agentcraft.network.BridgeChecks'
+	enableAssertions = true
+}
+tasks.named('check') { dependsOn tasks.named('bridgeChecks') }

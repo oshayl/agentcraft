@@ -19,7 +19,7 @@ if not javac or not java:
     raise SystemExit("Java 25 is required; set JAVA_HOME to its installation directory")
 
 sources = sorted(FIXTURES.rglob("*.java")) + [
-    CLIENT / "foreman/Protocol.java",
+    ROOT / "mod/src/main/java/dev/agentcraft/client/foreman/Protocol.java",
     CLIENT / "goals/GoalScreen.java",
     CLIENT / "library/FileNotes.java",
     CLIENT / "library/LibraryScreen.java",

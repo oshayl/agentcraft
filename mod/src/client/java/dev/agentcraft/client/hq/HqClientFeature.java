@@ -50,7 +50,11 @@ public final class HqClientFeature {
 	public static void init() {
 		BlockEntityRenderers.register(ModBlockEntities.STATUS_LAMP, ctx -> new StatusLampRenderer());
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> Guard.run("hq.tick", () -> {
-			HqWorldDriver.tick(mc);
+			if (mc.getSingleplayerServer() != null && Foreman.state() != null && !Foreman.state().isStale()) {
+				var wanted = HqWorldDriver.compute(Foreman.state());
+				var layout = Anchors.current();
+				dev.agentcraft.client.world.ServerTasks.run(level -> HqWorldDriver.drive(level, wanted, layout));
+			}
 			ambience(mc);
 		}));
 		DevBridge.addStateContributor((mc, state) -> state.add("hq", stateJson()));

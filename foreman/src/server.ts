@@ -5,12 +5,17 @@ import type { IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Logger } from './context.js';
 import type { Foreman } from './foreman.js';
+import { bridgeAuthorized } from './bridge-auth.js';
+import { RequestLedger } from './request-ledger.js';
 import { parseClientMessage, PROTOCOL_VERSION, ServerMessage, type Outbound } from './protocol.js';
 
 export interface ServerOptions {
   host: string;
   port: number;
   allowBrowserOrigins?: boolean;
+  /** Optional in development; required by the deployment service configuration. */
+  bridgeToken?: string;
+  requestLedger?: string;
   /** validate every outbound message against the schema (tests/dev) */
   validateOutbound?: boolean;
   log: Logger;
@@ -47,12 +52,15 @@ export class ForemanServer {
   private unsub: (() => void) | undefined;
   private heartbeat: NodeJS.Timeout | undefined;
   private nextId = 1;
+  private ledger: RequestLedger | undefined;
   port = 0;
 
   constructor(
     private foreman: Foreman,
     private opts: ServerOptions,
-  ) {}
+  ) {
+    this.ledger = opts.requestLedger ? new RequestLedger(opts.requestLedger) : undefined;
+  }
 
   get clientCount(): number {
     return [...this.clients].filter((c) => c.hello).length;
@@ -65,6 +73,7 @@ export class ForemanServer {
         port: this.opts.port,
         maxPayload: 4 * 1024 * 1024,
         verifyClient: (info: { origin?: string; req: IncomingMessage }) => {
+          if (!bridgeAuthorized(info.req, this.opts.bridgeToken)) return false;
           const why = refuseReason(info.req, !!this.opts.allowBrowserOrigins);
           if (!why) return true;
           this.opts.log.warn(`rejected WebSocket: ${why}`);
@@ -134,7 +143,20 @@ export class ForemanServer {
         // be lenient: treat the first intent as an implicit hello so tools can fire-and-forget
         client.hello = true;
       }
-      void this.foreman.handle(msg, (out) => this.send(client, out));
+      const mutation = !['hello', 'diff.request', 'library.request'].includes(msg.type);
+      try {
+        if (mutation && this.ledger) {
+          const previous = this.ledger.begin(msg);
+          if (previous) { this.send(client, previous); return; }
+        }
+        // The job belongs to Foreman. Socket closure only removes the subscriber.
+        void this.foreman.handle(msg, (out) => {
+          if (mutation && out.type === 'ack') this.ledger?.complete(out);
+          this.send(client, out);
+        }).catch(() => this.opts.log.error('request failed; reconcile state before retrying'));
+      } catch {
+        this.send(client, { type: 'ack', re: msg.id ?? '', ok: false, error: 'request could not be recorded; refresh state and check service logs' });
+      }
     });
     ws.on('close', () => {
       this.clients.delete(client);

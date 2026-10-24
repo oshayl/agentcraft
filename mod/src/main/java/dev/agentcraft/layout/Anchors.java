@@ -105,6 +105,10 @@ public final class Anchors {
 		}
 	}
 
+	/** Remote clients receive immutable layouts; they never save or build the server world. */
+	public static void receiveRemote(JsonObject json) { set(fromJson(json)); }
+	public static void clearRemote() { set(Layout.EMPTY); }
+
 	// ------------------------------------------------------------------ persistence
 
 	private static Path file(MinecraftServer server) {
@@ -175,7 +179,7 @@ public final class Anchors {
 		return Math.round(v * 1000.0) / 1000.0;
 	}
 
-	static Layout fromJson(JsonObject root) {
+	public static Layout fromJson(JsonObject root) {
 		Map<String, Anchor> map = new LinkedHashMap<>();
 		JsonObject anchors = root.has("anchors") ? root.getAsJsonObject("anchors") : new JsonObject();
 		for (var e : anchors.entrySet()) {

@@ -1,0 +1,32 @@
+[Unit]
+Description=AgentCraft Foreman (Codex jobs, independent of Minecraft)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=agentcraft
+Group=agentcraft
+SupplementaryGroups=agentcraft-bridge
+WorkingDirectory=/var/lib/agentcraft/foreman
+Environment=HOME=/var/lib/agentcraft/foreman
+Environment=AGENTCRAFT_HOME=/var/lib/agentcraft/foreman
+Environment=CODEX_HOME=/var/lib/agentcraft/codex
+Environment=AGENTCRAFT_BACKEND=codex
+Environment=AGENTCRAFT_BRIDGE_TOKEN_FILE=/etc/agentcraft/bridge-token
+Environment=AGENTCRAFT_REQUIRE_BRIDGE_AUTH=1
+Environment=AGENTCRAFT_CODEX_PATH=/opt/agentcraft/current/codex/node_modules/.bin/codex
+Environment=PATH=/opt/agentcraft/current/runtime/node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/agentcraft/current/runtime/node/bin/node /opt/agentcraft/current/foreman/dist/main.js --backend codex --lead-engine codex --worker-engine codex --workers 1 --max-concurrent 1 --no-notify
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+KillMode=control-group
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agentcraft/foreman /var/lib/agentcraft/codex /var/lib/agentcraft/workspaces
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

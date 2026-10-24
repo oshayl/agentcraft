@@ -49,6 +49,10 @@ public final class ForemanLink {
 	private static final long PING_MS = 15_000;
 
 	private final URI uri;
+	private final @Nullable Consumer<String> relay;
+	private final @Nullable String bearerToken;
+	private @Nullable Consumer<String> observer;
+	private final String requestPrefix = "mc-" + java.util.UUID.randomUUID() + "-";
 	private final String modVersion;
 	private final ForemanState state;
 	private final Executor clientThread;
@@ -73,7 +77,15 @@ public final class ForemanLink {
 	private final Object sendLock = new Object();
 
 	public ForemanLink(URI uri, String modVersion, ForemanState state, Executor clientThread, boolean enabled) {
+		this(uri, modVersion, state, clientThread, enabled, null, null);
+	}
+
+	/** Relay is the Minecraft transport; bearerToken is only for the private server bridge. */
+	public ForemanLink(URI uri, String modVersion, ForemanState state, Executor clientThread, boolean enabled,
+		@Nullable Consumer<String> relay, @Nullable String bearerToken) {
 		this.uri = uri;
+		this.relay = relay;
+		this.bearerToken = bearerToken;
 		this.modVersion = modVersion;
 		this.state = state;
 		this.clientThread = clientThread;
@@ -97,6 +109,10 @@ public final class ForemanLink {
 			return;
 		}
 		running = true;
+		if (relay != null) {
+			publish(status.with(Phase.HANDSHAKE, null, 0));
+			return;
+		}
 		sched.execute(this::connect);
 		sched.scheduleAtFixedRate(this::watchdog, 5, 5, TimeUnit.SECONDS);
 		AgentCraft.LOGGER.info("Foreman link started ({})", uri);
@@ -104,6 +120,8 @@ public final class ForemanLink {
 
 	public synchronized void stop() {
 		running = false;
+		status = status.with(Phase.DISABLED, "link closed", 0);
+		generation.incrementAndGet();
 		WebSocket s = ws;
 		ws = null;
 		if (s != null) {
@@ -121,6 +139,16 @@ public final class ForemanLink {
 
 	/** Drop the current connection (if any) and connect again right away. */
 	public void reconnectNow() {
+		if (relay != null) {
+			failPending("refresh requested; reconcile state before retrying any action");
+			publish(status.with(Phase.HANDSHAKE, null, 0));
+			JsonObject hello = new JsonObject();
+			hello.addProperty("type", "bridge.hello");
+			hello.addProperty("protocol", Protocol.VERSION);
+			hello.addProperty("modVersion", modVersion);
+			relay.accept(hello.toString());
+			return;
+		}
 		sched.execute(() -> {
 			WebSocket s = ws;
 			if (s != null) {
@@ -162,9 +190,9 @@ public final class ForemanLink {
 		attempt++;
 		publish(status.with(Phase.CONNECTING, status.lastError(), 0).attempt(attempt));
 		try {
-			http.newWebSocketBuilder()
-				.connectTimeout(Duration.ofSeconds(3))
-				.buildAsync(uri, new Listener(gen))
+			var builder = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(3));
+			if (bearerToken != null) builder.header("Authorization", "Bearer " + bearerToken);
+			builder.buildAsync(uri, new Listener(gen))
 				.whenComplete((socket, err) -> {
 					if (err != null) {
 						fail(gen, describe(err), -1);
@@ -236,7 +264,12 @@ public final class ForemanLink {
 
 	private void publish(LinkStatus s) {
 		status = s;
-		clientThread.execute(() -> state.setLink(s));
+		clientThread.execute(() -> { if (status == s && running) state.setLink(s); });
+	}
+
+	private void dispatchCurrent(Runnable action) {
+		int gen = generation.get();
+		clientThread.execute(() -> { if (running && gen == generation.get()) action.run(); });
 	}
 
 	private static String describe(Throwable t) {
@@ -274,6 +307,11 @@ public final class ForemanLink {
 
 		@Override
 		public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+			if ((long) buf.length() + data.length() > 4 * 1024 * 1024) {
+				webSocket.abort();
+				fail(gen, "Foreman frame exceeds limit", -1);
+				return null;
+			}
 			buf.append(data);
 			if (last) {
 				String text = buf.toString();
@@ -319,6 +357,16 @@ public final class ForemanLink {
 		}
 	}
 
+	/** Receives an ordered complete frame from the Minecraft relay. */
+	public void receive(String text) { handle(text); }
+
+	public void observe(Consumer<String> listener) { observer = listener; }
+
+	public void remoteUnavailable(String reason) {
+		failPending(reason);
+		publish(status.with(Phase.WAITING_RETRY, reason, 0));
+	}
+
 	private void handle(String text) {
 		lastInbound = System.currentTimeMillis();
 		messages++;
@@ -356,7 +404,7 @@ public final class ForemanLink {
 					if (f != null) {
 						f.complete(diff);
 					}
-					clientThread.execute(() -> {
+					dispatchCurrent(() -> {
 						for (Consumer<Diff> l : diffListeners) {
 							try {
 								l.accept(diff);
@@ -369,20 +417,20 @@ public final class ForemanLink {
 				case "error" -> AgentCraft.LOGGER.info("Foreman error: {}", json.has("message") ? json.get("message").getAsString() : json);
 				case "snapshot" -> {
 					// parse + apply on the client thread, then mark the link live
-					clientThread.execute(() -> {
+					dispatchCurrent(() -> {
 						try {
 							state.receive(type, json);
+							if (status.phase() != Phase.SYNCED) {
+								attempt = 0;
+								status = status.with(Phase.SYNCED, null, 0);
+								state.setLink(status);
+							}
 						} catch (Exception e) {
 							AgentCraft.LOGGER.warn("Bad snapshot from the Foreman", e);
 						}
 					});
-					if (status.phase() != Phase.SYNCED) {
-						attempt = 0;
-						AgentCraft.LOGGER.info("Foreman link synced ({})", uri);
-						publish(status.with(Phase.SYNCED, null, 0));
-					}
 				}
-				default -> clientThread.execute(() -> {
+				default -> dispatchCurrent(() -> {
 					try {
 						state.receive(type, json);
 					} catch (Exception e) {
@@ -393,6 +441,7 @@ public final class ForemanLink {
 		} catch (Exception e) {
 			AgentCraft.LOGGER.warn("Could not handle Foreman message '{}'", type, e);
 		}
+		if (observer != null) dispatchCurrent(() -> observer.accept(text));
 	}
 
 	// ------------------------------------------------------------------ send
@@ -405,7 +454,7 @@ public final class ForemanLink {
 	public CompletableFuture<Ack> send(JsonObject message) {
 		CompletableFuture<Ack> raw = new CompletableFuture<>();
 		WebSocket s = ws;
-		if (s == null || status.phase() != Phase.SYNCED) {
+		if (!running || (s == null && relay == null) || status.phase() != Phase.SYNCED) {
 			raw.completeExceptionally(new IllegalStateException("Foreman not connected (" + status.phaseName() + ")"));
 			return onClientThread(raw);
 		}
@@ -413,7 +462,7 @@ public final class ForemanLink {
 		if (message.has("id") && message.get("id").isJsonPrimitive()) {
 			id = message.get("id").getAsString();
 		} else {
-			id = "mc-" + ids.incrementAndGet();
+			id = requestPrefix + ids.incrementAndGet();
 			message.addProperty("id", id);
 		}
 		if (!message.has("v")) {
@@ -421,7 +470,12 @@ public final class ForemanLink {
 		}
 		pendingAcks.put(id, raw);
 		raw.orTimeout(ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS).whenComplete((a, e) -> pendingAcks.remove(id));
-		sendRaw(s, message.toString()).exceptionally(t -> {
+		CompletableFuture<?> sent;
+		try {
+			if (relay != null) { relay.accept(message.toString()); sent = CompletableFuture.completedFuture(null); }
+			else sent = sendRaw(s, message.toString());
+		} catch (Exception e) { sent = CompletableFuture.failedFuture(e); }
+		sent.exceptionally(t -> {
 			raw.completeExceptionally(t);
 			return null;
 		});
@@ -430,7 +484,7 @@ public final class ForemanLink {
 
 	/** {@code diff.request}; completes (client thread) with the {@code diff} reply (check {@code diff.error()}). */
 	public CompletableFuture<Diff> requestDiff(String repoId, String worktree) {
-		String requestId = "mcd-" + ids.incrementAndGet();
+		String requestId = requestPrefix + "diff-" + ids.incrementAndGet();
 		CompletableFuture<Diff> raw = new CompletableFuture<>();
 		pendingDiffs.put(requestId, raw);
 		raw.orTimeout(ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS).whenComplete((d, e) -> pendingDiffs.remove(requestId));
@@ -450,7 +504,7 @@ public final class ForemanLink {
 	 * ({@code noteId} non-null). Completes on the client thread; check {@code error()}.
 	 */
 	public CompletableFuture<Protocol.Library> requestLibrary(String source, @Nullable String noteId, @Nullable String query, @Nullable Integer limit) {
-		String requestId = "mcl-" + ids.incrementAndGet();
+		String requestId = requestPrefix + "lib-" + ids.incrementAndGet();
 		CompletableFuture<Protocol.Library> raw = new CompletableFuture<>();
 		pendingLibrary.put(requestId, raw);
 		raw.orTimeout(ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS).whenComplete((d, e) -> pendingLibrary.remove(requestId));
@@ -494,5 +548,7 @@ public final class ForemanLink {
 		pendingAcks.clear();
 		pendingDiffs.values().forEach(f -> f.completeExceptionally(ex));
 		pendingDiffs.clear();
+		pendingLibrary.values().forEach(f -> f.completeExceptionally(ex));
+		pendingLibrary.clear();
 	}
 }

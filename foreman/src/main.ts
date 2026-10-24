@@ -9,6 +9,7 @@ import { FOREMAN_VERSION, HELP, loadConfig, type Config } from './config.js';
 import { consoleLogger } from './context.js';
 import { Foreman } from './foreman.js';
 import { ForemanServer } from './server.js';
+import { bridgeToken } from './bridge-auth.js';
 import { claimRunFiles, homeRunFile, liveOwner, profileRunFile, releaseRunFiles } from './runfile.js';
 import { isInsideOrEqual } from './util/fsx.js';
 
@@ -62,7 +63,10 @@ export async function main(argv: string[]): Promise<void> {
 
   const foreman = new Foreman({ config: cfg, logger: log });
   const backend = cfg.backend === 'sim' ? new SimBackend(foreman, cfg.sim) : createTeam(foreman, cfg);
-  const server = new ForemanServer(foreman, { host: cfg.host, port: cfg.port, allowBrowserOrigins: cfg.allowBrowserOrigins, validateOutbound: cfg.debug, log });
+  const token = bridgeToken();
+  const server = new ForemanServer(foreman, { host: cfg.host, port: cfg.port, bridgeToken: token,
+    ...(token ? { requestLedger: path.join(cfg.dataDir, 'bridge-requests.jsonl') } : {}),
+    allowBrowserOrigins: cfg.allowBrowserOrigins, validateOutbound: cfg.debug, log });
 
   try {
     await server.start();

@@ -41,11 +41,11 @@ import java.util.function.Consumer;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The client-side model of the Foreman's state: agents, tasks, decisions, repos, memory, goals,
+ * The shared view model of the Foreman's state: agents, tasks, decisions, repos, memory, goals,
  * feed, per-agent log tails, the latest speech per agent, recent notifications, the Foreman status
  * and the link state.
  *
- * <p><b>Threading:</b> mutated only on the client (render) thread (the link parses frames on its
+ * <p><b>Threading:</b> mutated only on its owning thread (client render or dedicated server) (the link parses frames on its
  * own thread and hands them over with {@code Minecraft.execute}). Read it from the client thread:
  * renderers, screens, HUD, client tick handlers. From other threads use
  * {@code DevBridge.onClient(...)}. The getters return unmodifiable live views; copy if you keep
@@ -79,7 +79,7 @@ public final class ForemanState {
 
 	private final List<ForemanListener> listeners = new CopyOnWriteArrayList<>();
 
-	ForemanState(LinkStatus initial) {
+	public ForemanState(LinkStatus initial) {
 		this.link = initial;
 	}
 
@@ -228,6 +228,34 @@ public final class ForemanState {
 		return snapshots;
 	}
 
+	/** Drop data on a world/session change while preserving UI listeners. */
+	public void clearData() {
+		agents.clear(); tasks.clear(); decisions.clear(); repos.clear(); memory.clear(); goals.clear();
+		logs.clear(); lastSay.clear(); feed.clear(); notifications.clear();
+		goal = null; status = null; snapshots = 0; snapshotAt = 0; lastMessageAt = 0;
+		hold = false; held.clear(); heldDropped = 0;
+		fire(l -> l.onSnapshot(this));
+	}
+
+	/** Snapshot for a newly joined player; called on the model's owning thread. */
+	public JsonObject snapshotJson() {
+		JsonObject out = new JsonObject();
+		out.addProperty("v", Protocol.VERSION);
+		out.addProperty("type", "snapshot");
+		out.add("foreman", ForemanJson.GSON.toJsonTree(status));
+		out.add("agents", ForemanJson.GSON.toJsonTree(agents.values()));
+		out.add("tasks", ForemanJson.GSON.toJsonTree(tasks.values()));
+		out.add("decisions", ForemanJson.GSON.toJsonTree(decisions.values()));
+		out.add("repos", ForemanJson.GSON.toJsonTree(repos.values()));
+		out.add("memory", ForemanJson.GSON.toJsonTree(memory.values()));
+		out.add("goals", ForemanJson.GSON.toJsonTree(goals.values()));
+		out.add("goal", ForemanJson.GSON.toJsonTree(goal));
+		out.add("feed", ForemanJson.GSON.toJsonTree(feed));
+		var tails = agents.keySet().stream().map(id -> new AgentLogs(id, logs(id))).toList();
+		out.add("logs", ForemanJson.GSON.toJsonTree(tails));
+		return out;
+	}
+
 	// ------------------------------------------------------------------ listeners
 
 	public void addListener(ForemanListener l) {
@@ -252,7 +280,7 @@ public final class ForemanState {
 
 	// ------------------------------------------------------------------ mutation (client thread, from ForemanLink)
 
-	void setLink(LinkStatus status) {
+	public void setLink(LinkStatus status) {
 		this.link = status;
 		fire(l -> l.onConnection(status));
 	}
@@ -269,7 +297,7 @@ public final class ForemanState {
 	 * A message from the live link. While {@link #setHold held}, it is queued instead of applied, so
 	 * a choreographed shot sees only what it injects; otherwise it is applied at once.
 	 */
-	void receive(String type, JsonObject json) {
+	public void receive(String type, JsonObject json) {
 		if (hold) {
 			held.addLast(new Object[] {type, json});
 			while (held.size() > HOLD_MAX) {

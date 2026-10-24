@@ -1,0 +1,26 @@
+[Unit]
+Description=AgentCraft private Fabric server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=agentcraft-minecraft
+Group=agentcraft-bridge
+WorkingDirectory=/var/lib/agentcraft/minecraft
+Environment=AGENTCRAFT_BRIDGE_TOKEN_FILE=/etc/agentcraft/bridge-token
+EnvironmentFile=/etc/agentcraft/minecraft.env
+ExecStart=/opt/agentcraft/current/runtime/java/bin/java -Xms1G -Xmx3G -jar /opt/agentcraft/current/fabric-server.jar nogui
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agentcraft/minecraft
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

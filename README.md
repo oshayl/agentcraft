@@ -378,3 +378,7 @@ not affiliated with Mojang, Microsoft or Anthropic.
 <br>
 <sub>Built with Claude.</sub>
 </div>
+
+### Private dedicated server deployment
+
+The private server implementation and Mac client installation package are documented in [deploy/README.md](deploy/README.md). It uses a separate persistent Foreman service with the Codex backend, independent of player connections. Dedicated server boot, account authentication, remote join, and recovery must be validated on the deployment target before live use.

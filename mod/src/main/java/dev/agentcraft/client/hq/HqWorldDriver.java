@@ -9,14 +9,12 @@ import dev.agentcraft.block.entity.DecisionPodiumBlockEntity;
 import dev.agentcraft.block.entity.MergeStationBlockEntity;
 import dev.agentcraft.block.entity.MonitorBlockEntity;
 import dev.agentcraft.block.entity.StatusLampBlockEntity;
-import dev.agentcraft.client.foreman.Foreman;
 import dev.agentcraft.client.foreman.ForemanState;
 import dev.agentcraft.client.foreman.Protocol;
 import dev.agentcraft.client.foreman.Protocol.Agent;
 import dev.agentcraft.client.foreman.Protocol.DecisionKind;
 import dev.agentcraft.client.foreman.Protocol.Goal;
 import dev.agentcraft.client.foreman.Protocol.Repo;
-import dev.agentcraft.client.world.ServerTasks;
 import dev.agentcraft.layout.Anchor;
 import dev.agentcraft.layout.AnchorNames;
 import dev.agentcraft.layout.Anchors;
@@ -25,7 +23,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
@@ -62,11 +59,10 @@ public final class HqWorldDriver {
 	private static final int SIGNAL_REACH = 3;
 
 	/** What the world should show, by binding. Immutable once built. */
-	record Wanted(Map<String, LampStatus> lamps, boolean podiumOpen, boolean mergeActive, Map<String, Boolean> monitorLit) {
+	public record Wanted(Map<String, LampStatus> lamps, boolean podiumOpen, boolean mergeActive, Map<String, Boolean> monitorLit) {
 	}
 
 	private static @Nullable Wanted last;
-	private static long lastRevision = -1;
 	private static long lastLayout = -1;
 	private static int ticks;
 	private static volatile int lastChanged;
@@ -83,31 +79,19 @@ public final class HqWorldDriver {
 		return last;
 	}
 
-	static void tick(Minecraft mc) {
-		if (mc.level == null || mc.getSingleplayerServer() == null) {
-			return;
-		}
-		ForemanState st = Foreman.state();
-		Anchors.Layout layout = Anchors.current();
-		if (st == null || !st.hasData() || st.isStale() || layout.isEmpty() || layout.bounds() == null) {
-			return;
-		}
-		ticks++;
-		boolean changed = st.revision() != lastRevision || layout.revision() != lastLayout;
-		if (!changed && ticks % RESYNC_TICKS != 0) {
-			return;
-		}
-		Wanted w = changed || last == null ? compute(st) : last;
-		lastRevision = st.revision();
+	/** Server thread; the caller owns this model or supplies an immutable computed view. */
+	public static void tick(ServerLevel level, ForemanState state) {
+		if (state == null || !state.hasData() || state.isStale()) return;
+		drive(level, compute(state), Anchors.current());
+	}
+
+	public static void drive(ServerLevel level, Wanted wanted, Anchors.Layout layout) {
+		if (layout.isEmpty() || layout.bounds() == null) return;
+		boolean changed = !Objects.equals(last, wanted) || lastLayout != layout.revision();
+		if (!changed && ++ticks % RESYNC_TICKS != 0) return;
+		last = wanted;
 		lastLayout = layout.revision();
-		boolean differs = !Objects.equals(w, last);
-		last = w;
-		if (differs || ticks % RESYNC_TICKS == 0) {
-			Anchors.Bounds b = layout.bounds();
-			List<BlockPos> podiumSignals = signalCenters(layout, AnchorNames.DECISION_PODIUM);
-			List<BlockPos> mergeSignals = signalCenters(layout, AnchorNames.MERGESTATION);
-			ServerTasks.run(level -> lastChanged = apply(level, w, b, podiumSignals, mergeSignals));
-		}
+		lastChanged = apply(level, wanted, layout.bounds(), signalCenters(layout, AnchorNames.DECISION_PODIUM), signalCenters(layout, AnchorNames.MERGESTATION));
 	}
 
 	/** Block positions of the anchors of a station (all its slots). */
@@ -161,7 +145,7 @@ public final class HqWorldDriver {
 		return LampStatus.forAgentState(a.state().wire());
 	}
 
-	static Wanted compute(ForemanState st) {
+	public static Wanted compute(ForemanState st) {
 		Map<String, LampStatus> lamps = new HashMap<>();
 		Map<String, Boolean> lit = new HashMap<>();
 		Map<String, String> waitingOn = awaiting(st);
